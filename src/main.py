@@ -75,6 +75,7 @@ class PhoneFarmApp(tk.Tk):
 
         self._is_closing = False
 
+        self._setup_styles()
         self._build_header()
         self._build_body()
         self._build_statusbar()
@@ -86,6 +87,131 @@ class PhoneFarmApp(tk.Tk):
 
         # Start live touch & swipe sync tracker for Master screen
         threading.Thread(target=self._touch_tracker_loop, daemon=True).start()
+
+    def _setup_styles(self):
+        """Configure unified modern cyber dark styles for ttk widgets and dropdowns."""
+        style = ttk.Style(self)
+        style.theme_use("clam")
+
+        # 1. TCombobox Styling (Input Select Dark Theme)
+        style.configure(
+            "TCombobox",
+            background=COLORS["bg_surface"],
+            fieldbackground=COLORS["bg_input"],
+            foreground=COLORS["text_white"],
+            darkcolor=COLORS["border_card"],
+            lightcolor=COLORS["border_card"],
+            bordercolor=COLORS["border_card"],
+            arrowcolor=COLORS["accent_cyan"],
+            arrowsize=11,
+            padding=[8, 5, 6, 5],
+            relief="flat",
+            font=("Segoe UI", 9)
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", "focus", COLORS["bg_input"]),
+                ("readonly", "hover", COLORS["bg_input"]),
+                ("readonly", COLORS["bg_input"]),
+                ("disabled", COLORS["bg_root"]),
+            ],
+            foreground=[
+                ("readonly", "focus", COLORS["text_white"]),
+                ("readonly", "hover", COLORS["text_white"]),
+                ("readonly", COLORS["text_white"]),
+                ("disabled", COLORS["text_muted"]),
+            ],
+            selectbackground=[
+                ("readonly", "focus", COLORS["bg_input"]),
+                ("readonly", COLORS["bg_input"]),
+            ],
+            selectforeground=[
+                ("readonly", "focus", COLORS["text_white"]),
+                ("readonly", COLORS["text_white"]),
+            ],
+            background=[
+                ("active", COLORS["bg_card_hover"]),
+                ("pressed", COLORS["bg_card"]),
+                ("readonly", COLORS["bg_surface"]),
+                ("disabled", COLORS["bg_root"]),
+            ],
+            arrowcolor=[
+                ("active", COLORS["text_white"]),
+                ("pressed", COLORS["accent_cyan"]),
+                ("readonly", COLORS["accent_cyan"]),
+                ("disabled", COLORS["text_muted"]),
+            ],
+            bordercolor=[
+                ("focus", COLORS["border_glow"]),
+                ("hover", COLORS["border_glow"]),
+                ("!focus", COLORS["border_card"]),
+            ],
+            lightcolor=[
+                ("focus", COLORS["border_glow"]),
+                ("hover", COLORS["border_glow"]),
+                ("!focus", COLORS["border_card"]),
+            ],
+            darkcolor=[
+                ("focus", COLORS["border_glow"]),
+                ("hover", COLORS["border_glow"]),
+                ("!focus", COLORS["border_card"]),
+            ]
+        )
+
+        # 2. Combobox Popdown Listbox Styling (Dropdown Options Menu)
+        style.configure(
+            "ComboboxPopdownFrame",
+            background=COLORS["bg_card"],
+            bordercolor=COLORS["border_card"]
+        )
+
+        for target in ("*TCombobox*Listbox.", "*ComboboxPopdown*Listbox."):
+            self.option_add(f"{target}background", COLORS["bg_card"])
+            self.option_add(f"{target}foreground", COLORS["text_white"])
+            self.option_add(f"{target}selectBackground", COLORS["accent_blue"])
+            self.option_add(f"{target}selectForeground", "#ffffff")
+            self.option_add(f"{target}font", ("Segoe UI", 9))
+            self.option_add(f"{target}relief", "flat")
+            self.option_add(f"{target}borderWidth", 0)
+            self.option_add(f"{target}highlightThickness", 1)
+            self.option_add(f"{target}highlightColor", COLORS["border_glow"])
+            self.option_add(f"{target}highlightBackground", COLORS["border_card"])
+            self.option_add(f"{target}activestyle", "none")
+
+        self.option_add("*ComboboxPopdown*background", COLORS["bg_card"])
+
+        # 3. Modern Dark Scrollbar
+        style.configure(
+            "Vertical.TScrollbar",
+            background=COLORS["bg_surface"],
+            troughcolor=COLORS["bg_root"],
+            bordercolor=COLORS["border_card"],
+            arrowcolor=COLORS["text_secondary"],
+            relief="flat"
+        )
+        style.map(
+            "Vertical.TScrollbar",
+            background=[("active", COLORS["bg_card_hover"]), ("pressed", COLORS["accent_blue"])],
+            arrowcolor=[("active", COLORS["accent_cyan"]), ("pressed", COLORS["accent_cyan"])]
+        )
+
+        # 4. Modern Dark Treeview
+        style.configure(
+            "Treeview",
+            background=COLORS["bg_header"],
+            foreground=COLORS["text_primary"],
+            fieldbackground=COLORS["bg_header"],
+            borderwidth=0,
+            font=("Segoe UI", 9)
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=COLORS["bg_surface"],
+            foreground=COLORS["text_white"],
+            relief="flat",
+            font=("Segoe UI", 9, "bold")
+        )
 
     def _build_header(self):
         self.header_frame = tk.Frame(self, bg=COLORS["bg_header"], padx=14, pady=8)
@@ -198,20 +324,18 @@ class PhoneFarmApp(tk.Tk):
             self.col_btns[num] = b
         self._update_col_buttons()
 
-        # Quality Preset Dropdown
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TCombobox", fieldbackground=COLORS["bg_input"], background=COLORS["bg_surface"], foreground=COLORS["text_white"])
-
+        # Quality Preset Dropdown (Modern Dark Input Select)
         cb_preset = ttk.Combobox(
             f_right,
             textvariable=self.preset_var,
             values=list(QUALITY_PRESETS.keys()),
-            width=15,
-            state="readonly"
+            width=20,
+            state="readonly",
+            font=("Segoe UI", 8, "bold"),
+            cursor="hand2"
         )
         cb_preset.pack(side="left", padx=(0, 8))
-        cb_preset.bind("<<ComboboxSelected>>", lambda e: self.scrcpy.set_preset(self.preset_var.get()))
+        cb_preset.bind("<<ComboboxSelected>>", lambda e: (cb_preset.selection_clear(), self.scrcpy.set_preset(self.preset_var.get())))
 
         # Sync Action Toggle Button (Modern Sleek Pill)
         self.btn_sync = tk.Button(

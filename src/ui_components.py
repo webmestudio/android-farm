@@ -735,7 +735,14 @@ class WiFiConnectDialog(tk.Toplevel):
             )
             lbl_hint1.pack(anchor="w", pady=(0, 4))
 
-            cb_dev = ttk.Combobox(f_sec1, textvariable=self.sel_usb_var, values=dev_labels, state="readonly")
+            cb_dev = ttk.Combobox(
+                f_sec1,
+                textvariable=self.sel_usb_var,
+                values=dev_labels,
+                state="readonly",
+                font=("Segoe UI", 9),
+                cursor="hand2"
+            )
             cb_dev.pack(fill="x", pady=(0, 8))
 
             self.lbl_ip_info = tk.Label(
@@ -766,7 +773,7 @@ class WiFiConnectDialog(tk.Toplevel):
                             ))
                     threading.Thread(target=_fetch, daemon=True).start()
 
-            cb_dev.bind("<<ComboboxSelected>>", _update_detected_ip)
+            cb_dev.bind("<<ComboboxSelected>>", lambda e: (cb_dev.selection_clear(), _update_detected_ip(e)))
             self.after(200, _update_detected_ip)
 
             self.btn_switch = tk.Button(
