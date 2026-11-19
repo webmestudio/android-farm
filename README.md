@@ -11,12 +11,26 @@ Menggunakan teknik **Native Win32 Docking** yang langsung meng-embed engine `scr
 1. Hubungkan HP Android ke komputer via kabel USB atau Wi-Fi.
 2. Pastikan **USB Debugging** sudah aktif di Opsi Pengembang (Developer Options) HP.
 3. Jalankan aplikasi dengan salah satu cara berikut:
-   - **Paling Praktis:** Klik ganda file [`run_farm.bat`](run_farm.bat).
-   - **Lewat Terminal:**
+   - **📦 Portable EXE (Tanpa Perlu Python):**
+     Klik ganda file [`dist\PhoneFarmDashboard.exe`](dist/PhoneFarmDashboard.exe). Dapat dipindahkan dan dijalankan di komputer Windows mana saja secara mandiri!
+   - **⚡ Launcher Praktis:**
+     Klik ganda file [`run_farm.bat`](run_farm.bat) (otomatis memilih Python atau Portable EXE).
+   - **🐍 Lewat Terminal (Python Source):**
      ```powershell
      python src\main.py
      ```
 4. Semua HP yang terhubung akan otomatis terdeteksi dan layarnya langsung muncul dalam grid!
+
+---
+
+## 🛠️ Kompilasi / Build Portable EXE
+
+Jika Anda mengubah source code dan ingin mengompilasi ulang menjadi single-file executable portable:
+1. Klik ganda file [`build_exe.bat`](build_exe.bat).
+2. Skrip otomatis memeriksa dependensi (`pyinstaller`, `pillow`), mengenerate icon `app.ico`, dan mengemas seluruh binary ADB & scrcpy ke dalam satu file mandiri:
+   ```
+   dist\PhoneFarmDashboard.exe
+   ```
 
 ---
 
@@ -66,7 +80,9 @@ Anda dapat memilih preset di dropdown toolbar atas sesuai jumlah HP yang Anda ja
 ## 📁 Struktur Folder
 
 ```
-scrcpy/
+android-farm/
+├── dist/                      # Folder output Portable Executable
+│   └── PhoneFarmDashboard.exe # 📦 Portable EXE Mandiri (Zero-Install)
 ├── bin/                       # Engine scrcpy v5.0.1 & ADB binaries (Win64)
 │   ├── scrcpy.exe
 │   ├── scrcpy-server
@@ -74,13 +90,16 @@ scrcpy/
 │   └── *.dll
 ├── src/                       # Source Code Dashboard Python
 │   ├── __init__.py
-│   ├── config.py              # Konfigurasi preset & tema
+│   ├── config.py              # Konfigurasi preset, path portable & tema
 │   ├── win32_dock.py          # Modul Windows API zero-lag docking
 │   ├── adb_manager.py         # Modul komunikasi ADB & telemetri HP
 │   ├── scrcpy_manager.py      # Pengelola proses scrcpy
 │   ├── sync_engine.py         # Mesin sinkronisasi multi-device & broadcast
 │   ├── ui_components.py       # Komponen visual (DeviceCard, Centered Modals)
 │   └── main.py                # Jendela utama aplikasi & dynamic canvas
-├── run_farm.bat               # 🚀 Launcher 1-Klik di Root Folder
+├── app.ico                    # Multi-resolution Windows App Icon
+├── PhoneFarmDashboard.spec    # Konfigurasi build PyInstaller
+├── build_exe.bat              # 🛠️ Skrip 1-Klik Kompilasi ke Portable EXE
+├── run_farm.bat               # 🚀 Launcher Pintar (Python / EXE)
 └── README.md                  # Dokumentasi Project
 ```

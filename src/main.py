@@ -7,12 +7,24 @@ import time
 import os
 import sys
 
+# Guard stdout/stderr when packaged with PyInstaller --noconsole
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w")
+    except Exception:
+        pass
+
 # Ensure src parent directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.config import (
     COLORS, QUALITY_PRESETS, DEFAULT_PRESET, DEFAULT_COLUMNS,
-    CELL_HEIGHT, DEFAULT_CELL_WIDTH, POLL_INTERVAL_MS
+    CELL_HEIGHT, DEFAULT_CELL_WIDTH, POLL_INTERVAL_MS, APP_ICON
 )
 from src.adb_manager import ADBManager, ADBDevice
 from src.scrcpy_manager import ScrcpyManager
@@ -29,6 +41,17 @@ class PhoneFarmApp(tk.Tk):
         self.geometry("1480x920")
         self.minsize(960, 640)
         self.configure(bg=COLORS["bg_root"])
+
+        # Window Icon
+        if APP_ICON and os.path.exists(APP_ICON):
+            try:
+                if APP_ICON.lower().endswith(".ico"):
+                    self.iconbitmap(APP_ICON)
+                else:
+                    self._icon_img = tk.PhotoImage(file=APP_ICON)
+                    self.iconphoto(True, self._icon_img)
+            except Exception:
+                pass
 
         # Core Managers
         self.adb = ADBManager()

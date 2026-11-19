@@ -1,14 +1,47 @@
 """Configuration settings for Scrcpy Phone Farm Dashboard."""
 
 import os
+import sys
 from pathlib import Path
 
 # Paths
-BASE_DIR = Path(__file__).resolve().parent.parent
-BIN_DIR = BASE_DIR / "bin"
+if getattr(sys, "frozen", False):
+    # Running inside PyInstaller executable
+    EXE_DIR = Path(sys.executable).resolve().parent
+    MEIPASS_DIR = Path(getattr(sys, "_MEIPASS", EXE_DIR))
+
+    # Check order:
+    # 1. External bin/ beside the .exe (portable folder mode / user override)
+    # 2. Internal bundled bin/ in _MEIPASS (single-file standalone mode)
+    # 3. Default fallback
+    if (EXE_DIR / "bin" / "scrcpy.exe").exists():
+        BASE_DIR = EXE_DIR
+        BIN_DIR = EXE_DIR / "bin"
+    elif (MEIPASS_DIR / "bin" / "scrcpy.exe").exists():
+        BASE_DIR = MEIPASS_DIR
+        BIN_DIR = MEIPASS_DIR / "bin"
+    else:
+        BASE_DIR = EXE_DIR
+        BIN_DIR = EXE_DIR / "bin"
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    BIN_DIR = BASE_DIR / "bin"
+
 SCRCPY_EXE = str(BIN_DIR / "scrcpy.exe")
 ADB_EXE = str(BIN_DIR / "adb.exe")
 SCRCPY_SERVER = str(BIN_DIR / "scrcpy-server")
+
+# Application Icon Path
+APP_ICON = None
+_icon_candidates = [
+    BASE_DIR / "app.ico",
+    Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "app.ico" if getattr(sys, "frozen", False) else None,
+    BIN_DIR / "scrcpy.png"
+]
+for _candidate in _icon_candidates:
+    if _candidate and _candidate.exists():
+        APP_ICON = str(_candidate)
+        break
 
 # Quality Presets (optimized for multi-device performance)
 QUALITY_PRESETS = {
