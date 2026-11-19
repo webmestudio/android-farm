@@ -216,7 +216,8 @@ class DeviceCard(tk.Frame):
     def get_container_hwnd(self) -> int:
         """Returns the Win32 HWND of the screen frame for scrcpy docking."""
         self.screen_frame.update_idletasks()
-        return self.screen_frame.winfo_id()
+        self.screen_hwnd = self.screen_frame.winfo_id()
+        return self.screen_hwnd
 
     def hide_placeholder(self):
         """Hides the loading placeholder once docked."""

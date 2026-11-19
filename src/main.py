@@ -340,15 +340,25 @@ class PhoneFarmApp(tk.Tk):
 
         self.empty_frame_id = self.canvas.create_window((0, 0), window=self.empty_frame, anchor="center")
 
-        # Responsive Centering & Dynamic Layout
-        self.canvas.bind("<Configure>", self._update_layout)
+        # Responsive Centering & Dynamic Layout (debounced by size change only)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         # Mousewheel scroll support (only active when content overflows)
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
+    def _on_canvas_configure(self, event):
+        """Only recomputes layout if canvas dimensions actually changed,
+        preventing lag and stutter during window movement or menu interactions."""
+        if not event:
+            return
+        w, h = event.width, event.height
+        if getattr(self, "_last_canvas_size", None) == (w, h):
+            return
+        self._last_canvas_size = (w, h)
+        self._update_layout()
+
     def _update_layout(self, event=None):
         """Dynamically centers the layout and toggles scrollbar visibility only when needed."""
-        self.canvas.update_idletasks()
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
         if cw < 50 or ch < 50:
@@ -372,7 +382,6 @@ class PhoneFarmApp(tk.Tk):
             self.canvas.itemconfigure(self.empty_frame_id, state="hidden")
             self.canvas.itemconfigure(self.grid_frame_id, state="normal")
 
-            self.grid_frame.update_idletasks()
             gw = self.grid_frame.winfo_reqwidth()
             gh = self.grid_frame.winfo_reqheight()
 
@@ -461,20 +470,38 @@ class PhoneFarmApp(tk.Tk):
             self.f_master.config(bg=COLORS["bg_surface"])
 
     def _start_device_scanner(self):
-        """Background loop polling ADB devices and keeping farm screens awake."""
+        """Background loop polling ADB devices and keeping farm screens awake without blocking GUI."""
         def _scan_loop():
             last_wake_time = 0.0
+            last_battery_time = 0.0
             while not self._is_closing:
                 try:
                     devs = self.adb.get_devices()
+                    now = time.time()
+                    should_battery = (now - last_battery_time > 10.0)
+                    if should_battery:
+                        last_battery_time = now
+
+                    # Query telemetry in parallel in background thread pool (never blocks Tkinter!)
+                    def _fetch_d(d):
+                        if not d.has_static_info or should_battery:
+                            self.adb.update_telemetry(d, update_battery=should_battery)
+
+                    futures = [self.sync.executor.submit(_fetch_d, d) for d in devs]
+                    for f in futures:
+                        try:
+                            f.result(timeout=3.0)
+                        except Exception:
+                            pass
+
+                    # Dispatch lightweight UI update to main thread (< 0.5ms!)
                     self.after(0, lambda d=devs: self._sync_device_list(d))
 
-                    # Keep devices awake in phone farm (prevent black screen timeout)
-                    now = time.time()
-                    if now - last_wake_time > 18.0:
+                    # Keep devices awake in phone farm in background
+                    if now - last_wake_time > 20.0:
                         last_wake_time = now
                         for d in devs:
-                            self.adb.turn_screen_on(d.serial)
+                            self.sync.executor.submit(self.adb.turn_screen_on, d.serial)
                 except Exception as e:
                     print(f"[Scanner Error] {e}")
                 time.sleep(POLL_INTERVAL_MS / 1000.0)
@@ -483,16 +510,22 @@ class PhoneFarmApp(tk.Tk):
 
     def _manual_scan(self):
         self._log_status("Memindai perangkat ADB...")
-        threading.Thread(target=lambda: self._sync_device_list(self.adb.get_devices()), daemon=True).start()
+        def _bg_scan():
+            devs = self.adb.get_devices()
+            for d in devs:
+                self.adb.update_telemetry(d, update_battery=True)
+            self.after(0, lambda: self._sync_device_list(devs))
+        threading.Thread(target=_bg_scan, daemon=True).start()
 
     def _touch_tracker_loop(self):
         """Passively tracks mouse clicks and swipes on the Master device screen container
-        when Sync Action is ON, and broadcasts normalized tap/swipe events to selected targets."""
+        when Sync Action is ON, using pure Win32 API to eliminate Tcl interpreter lock contention."""
         user32 = ctypes.windll.user32
         VK_LBUTTON = 0x01
         my_pid = os.getpid()
 
         pt = wintypes.POINT()
+        rect = wintypes.RECT()
         is_tracking = False
         start_x, start_y = 0, 0
         current_x, current_y = 0, 0
@@ -507,7 +540,8 @@ class PhoneFarmApp(tk.Tk):
                 continue
 
             card = self.device_cards.get(self.master_serial)
-            if not card or not card.winfo_exists():
+            hwnd = getattr(card, "screen_hwnd", 0) if card else 0
+            if not card or not hwnd:
                 time.sleep(0.04)
                 continue
 
@@ -527,25 +561,22 @@ class PhoneFarmApp(tk.Tk):
                             scrcpy_pid = master_inst.process.pid if (master_inst and master_inst.process) else 0
 
                             if pid.value not in (my_pid, scrcpy_pid):
-                                time.sleep(0.015)
+                                time.sleep(0.02)
                                 continue
 
-                        # Check if mouse pressed inside Master screen frame
-                        try:
-                            fx = card.screen_frame.winfo_rootx()
-                            fy = card.screen_frame.winfo_rooty()
-                            fw = card.screen_frame.winfo_width()
-                            fh = card.screen_frame.winfo_height()
-                        except Exception:
-                            time.sleep(0.015)
-                            continue
+                        # Pure Win32 screen rect: 100% thread-safe, 0ms, zero Tcl GIL contention
+                        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                            fx = rect.left
+                            fy = rect.top
+                            fw = rect.right - rect.left
+                            fh = rect.bottom - rect.top
 
-                        if fx <= pt.x < fx + fw and fy <= pt.y < fy + fh:
-                            is_tracking = True
-                            start_x, start_y = pt.x, pt.y
-                            current_x, current_y = pt.x, pt.y
-                            start_time = time.time()
-                            frame_x, frame_y, frame_w, frame_h = fx, fy, fw, fh
+                            if fx <= pt.x < fx + fw and fy <= pt.y < fy + fh:
+                                is_tracking = True
+                                start_x, start_y = pt.x, pt.y
+                                current_x, current_y = pt.x, pt.y
+                                start_time = time.time()
+                                frame_x, frame_y, frame_w, frame_h = fx, fy, fw, fh
                     else:
                         current_x, current_y = pt.x, pt.y
             else:
@@ -574,7 +605,7 @@ class PhoneFarmApp(tk.Tk):
                                 self.after(0, lambda t=len(targets), ms=duration_ms:
                                            self._log_status(f"👉 Swipe Master ({ms}ms) disinkronkan ke {t} HP target"))
 
-            time.sleep(0.015)
+            time.sleep(0.02)
 
     def _sync_device_list(self, new_devices):
         if self._is_closing:
@@ -593,6 +624,7 @@ class PhoneFarmApp(tk.Tk):
 
         new_serials = {d.serial for d in new_devices}
         current_serials = set(self.device_cards.keys())
+        devices_changed = (new_serials != current_serials)
 
         # 1. Remove disconnected devices
         for s in current_serials - new_serials:
@@ -606,21 +638,31 @@ class PhoneFarmApp(tk.Tk):
         for d in new_devices:
             if d.serial not in self.device_cards:
                 self.sync_target_serials.add(d.serial)
-                self.adb.update_telemetry(d)
                 self._add_device_card(d)
 
-        # 3. Update telemetry for existing devices
+        # 3. Update telemetry on UI only (telemetry was already queried in background!)
         for d in new_devices:
             if d.serial in self.device_cards:
-                self.adb.update_telemetry(d)
+                card_dev = self.device_cards[d.serial].device
+                card_dev.battery_level = d.battery_level
+                card_dev.battery_temp = d.battery_temp
+                card_dev.is_charging = d.is_charging
+                card_dev.os_version = d.os_version
+                card_dev.brand = d.brand
+                card_dev.screen_width = d.screen_width
+                card_dev.screen_height = d.screen_height
                 self.device_cards[d.serial].update_telemetry()
 
         # Ensure master is valid
         if not self.master_serial and new_devices:
             self.master_serial = new_devices[0].serial
+
         self._update_master_ui()
         self._update_sync_targets_ui()
-        self._update_layout()
+
+        # ONLY recalculate layout when devices were added or removed!
+        if devices_changed:
+            self._update_layout()
 
     def _add_device_card(self, device: ADBDevice):
         # Ensure screen is awake before initializing scrcpy

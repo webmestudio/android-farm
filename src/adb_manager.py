@@ -24,6 +24,7 @@ class ADBDevice:
         self.os_version: str = ""
         self.brand: str = ""
         self.is_sync_target: bool = True
+        self.has_static_info: bool = False
 
     def __repr__(self):
         return f"<ADBDevice {self.serial} ({self.model}) - Android {self.os_version or '?'} - {self.state}>"
@@ -81,45 +82,44 @@ class ADBManager:
 
         return devices
 
-    def update_telemetry(self, device: ADBDevice) -> None:
-        """Fetches battery level, temperature, and screen resolution."""
+    def update_telemetry(self, device: ADBDevice, update_battery: bool = True) -> None:
+        """Fetches battery level, temperature, and screen resolution without blocking."""
         if device.state != "device":
             return
 
-        # 1. Battery Info
-        ok, out = self._exec(["-s", device.serial, "shell", "dumpsys", "battery"])
-        if ok and out:
-            level_match = re.search(r"level:\s*(\d+)", out)
-            if level_match:
-                device.battery_level = int(level_match.group(1))
-
-            temp_match = re.search(r"temperature:\s*(\d+)", out)
-            if temp_match:
-                # Temperature is usually in tenths of a degree Celsius (e.g. 315 -> 31.5)
-                device.battery_temp = round(int(temp_match.group(1)) / 10.0, 1)
-
-            usb_match = re.search(r"(AC|USB|Wireless)\s*powered:\s*true", out, re.IGNORECASE)
-            status_match = re.search(r"status:\s*(\d+)", out)
-            # 2 = Charging, 5 = Full
-            device.is_charging = bool(usb_match or (status_match and status_match.group(1) in ("2", "5")))
-
-        # 2. Screen Size
-        ok, out = self._exec(["-s", device.serial, "shell", "wm", "size"])
-        if ok and out:
-            size_match = re.search(r"(\d+)\s*x\s*(\d+)", out)
-            if size_match:
-                device.screen_width = int(size_match.group(1))
-                device.screen_height = int(size_match.group(2))
-
-        # 3. OS Version & Brand (queried once per device session)
-        if not device.os_version or not device.brand:
-            ok, out = self._exec(["-s", device.serial, "shell", "getprop ro.build.version.release; getprop ro.product.brand"])
+        # 1. Fetch static specs (Screen size, OS version, Brand) ONCE per connection
+        if not device.has_static_info:
+            ok, out = self._exec(["-s", device.serial, "shell", "wm size; getprop ro.build.version.release; getprop ro.product.brand"], timeout=4.0)
             if ok and out:
-                lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-                if len(lines) >= 1:
-                    device.os_version = lines[0]
-                if len(lines) >= 2:
-                    device.brand = lines[1].capitalize()
+                lines = [l.strip() for l in out.splitlines() if l.strip()]
+                for line in lines:
+                    size_match = re.search(r"(\d+)\s*x\s*(\d+)", line)
+                    if size_match:
+                        device.screen_width = int(size_match.group(1))
+                        device.screen_height = int(size_match.group(2))
+                        break
+                text_lines = [l for l in lines if "x" not in l and not l.startswith("Physical")]
+                if len(text_lines) >= 1:
+                    device.os_version = text_lines[0]
+                if len(text_lines) >= 2:
+                    device.brand = text_lines[1].capitalize()
+                device.has_static_info = True
+
+        # 2. Battery Info (only if requested)
+        if update_battery:
+            ok, out = self._exec(["-s", device.serial, "shell", "dumpsys", "battery"], timeout=4.0)
+            if ok and out:
+                level_match = re.search(r"level:\s*(\d+)", out)
+                if level_match:
+                    device.battery_level = int(level_match.group(1))
+
+                temp_match = re.search(r"temperature:\s*(\d+)", out)
+                if temp_match:
+                    device.battery_temp = round(int(temp_match.group(1)) / 10.0, 1)
+
+                usb_match = re.search(r"(AC|USB|Wireless)\s*powered:\s*true", out, re.IGNORECASE)
+                status_match = re.search(r"status:\s*(\d+)", out)
+                device.is_charging = bool(usb_match or (status_match and status_match.group(1) in ("2", "5")))
 
     def send_key(self, serial: str, keycode: int) -> bool:
         """Sends an Android keycode (e.g. 3 for Home, 4 for Back)."""
