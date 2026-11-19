@@ -1,0 +1,174 @@
+"""ADB Interface Manager for Device Discovery, Control, and Telemetry."""
+
+import subprocess
+import re
+from typing import List, Dict, Optional, Tuple
+from .config import ADB_EXE
+
+# Windows flag to suppress console window popup
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
+class ADBDevice:
+    def __init__(self, serial: str, state: str, model: str = "", product: str = ""):
+        self.serial = serial
+        self.state = state  # 'device', 'offline', 'unauthorized'
+        self.model = model or serial
+        self.product = product
+        self.battery_level: int = -1
+        self.battery_temp: float = 0.0
+        self.is_charging: bool = False
+        self.screen_width: int = 1080
+        self.screen_height: int = 2400
+
+    def __repr__(self):
+        return f"<ADBDevice {self.serial} ({self.model}) - {self.state}>"
+
+
+class ADBManager:
+    def __init__(self, adb_path: str = ADB_EXE):
+        self.adb_path = adb_path
+
+    def _exec(self, args: List[str], timeout: float = 10.0) -> Tuple[bool, str]:
+        """Executes an adb command silently and returns (success, stdout/stderr)."""
+        cmd = [self.adb_path] + args
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=NO_WINDOW
+            )
+            return (res.returncode == 0, res.stdout.strip())
+        except subprocess.TimeoutExpired:
+            return (False, "Timeout expired")
+        except Exception as e:
+            return (False, str(e))
+
+    def get_devices(self) -> List[ADBDevice]:
+        """Returns a list of connected devices with model and state info."""
+        ok, out = self._exec(["devices", "-l"])
+        if not ok or not out:
+            return []
+
+        devices = []
+        lines = out.splitlines()[1:]  # Skip 'List of devices attached'
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split()
+            if len(parts) >= 2:
+                serial = parts[0]
+                state = parts[1]
+
+                # Parse model:XXXX
+                model = serial
+                model_match = re.search(r"model:([^\s]+)", line)
+                if model_match:
+                    model = model_match.group(1).replace("_", " ")
+
+                product_match = re.search(r"product:([^\s]+)", line)
+                product = product_match.group(1) if product_match else ""
+
+                devices.append(ADBDevice(serial, state, model, product))
+
+        return devices
+
+    def update_telemetry(self, device: ADBDevice) -> None:
+        """Fetches battery level, temperature, and screen resolution."""
+        if device.state != "device":
+            return
+
+        # 1. Battery Info
+        ok, out = self._exec(["-s", device.serial, "shell", "dumpsys", "battery"])
+        if ok and out:
+            level_match = re.search(r"level:\s*(\d+)", out)
+            if level_match:
+                device.battery_level = int(level_match.group(1))
+
+            temp_match = re.search(r"temperature:\s*(\d+)", out)
+            if temp_match:
+                # Temperature is usually in tenths of a degree Celsius (e.g. 315 -> 31.5)
+                device.battery_temp = round(int(temp_match.group(1)) / 10.0, 1)
+
+            usb_match = re.search(r"(AC|USB|Wireless)\s*powered:\s*true", out, re.IGNORECASE)
+            status_match = re.search(r"status:\s*(\d+)", out)
+            # 2 = Charging, 5 = Full
+            device.is_charging = bool(usb_match or (status_match and status_match.group(1) in ("2", "5")))
+
+        # 2. Screen Size
+        ok, out = self._exec(["-s", device.serial, "shell", "wm", "size"])
+        if ok and out:
+            size_match = re.search(r"(\d+)\s*x\s*(\d+)", out)
+            if size_match:
+                device.screen_width = int(size_match.group(1))
+                device.screen_height = int(size_match.group(2))
+
+    def send_key(self, serial: str, keycode: int) -> bool:
+        """Sends an Android keycode (e.g. 3 for Home, 4 for Back)."""
+        ok, _ = self._exec(["-s", serial, "shell", "input", "keyevent", str(keycode)])
+        return ok
+
+    def key_home(self, serial: str) -> bool:
+        return self.send_key(serial, 3)
+
+    def key_back(self, serial: str) -> bool:
+        return self.send_key(serial, 4)
+
+    def key_recents(self, serial: str) -> bool:
+        return self.send_key(serial, 187)
+
+    def key_power(self, serial: str) -> bool:
+        return self.send_key(serial, 26)
+
+    def key_volume_up(self, serial: str) -> bool:
+        return self.send_key(serial, 24)
+
+    def key_volume_down(self, serial: str) -> bool:
+        return self.send_key(serial, 25)
+
+    def turn_screen_off(self, serial: str) -> bool:
+        """Puts screen to sleep (KEYCODE_SLEEP = 223)."""
+        return self.send_key(serial, 223)
+
+    def turn_screen_on(self, serial: str) -> bool:
+        """Wakes screen up (KEYCODE_WAKEUP = 224)."""
+        return self.send_key(serial, 224)
+
+    def send_tap(self, serial: str, x: int, y: int) -> bool:
+        """Sends touch tap event to specific coordinates."""
+        ok, _ = self._exec(["-s", serial, "shell", "input", "tap", str(x), str(y)])
+        return ok
+
+    def send_swipe(self, serial: str, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 250) -> bool:
+        """Sends swipe gesture."""
+        ok, _ = self._exec(["-s", serial, "shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
+        return ok
+
+    def send_text(self, serial: str, text: str) -> bool:
+        """Sends typed text to device input focus."""
+        # Spaces need to be replaced with %s for adb input text
+        escaped = text.replace(" ", "%s").replace("&", "\\&").replace('"', '\\"')
+        ok, _ = self._exec(["-s", serial, "shell", "input", "text", escaped])
+        return ok
+
+    def install_apk(self, serial: str, apk_path: str) -> Tuple[bool, str]:
+        """Installs an APK file to the device."""
+        return self._exec(["-s", serial, "install", "-r", apk_path], timeout=60.0)
+
+    def reboot(self, serial: str) -> bool:
+        """Reboots device."""
+        ok, _ = self._exec(["-s", serial, "reboot"])
+        return ok
+
+    def run_shell(self, serial: str, cmd: str) -> Tuple[bool, str]:
+        """Executes a custom shell command."""
+        return self._exec(["-s", serial, "shell", cmd])
+
+    def open_url(self, serial: str, url: str) -> bool:
+        """Opens URL in device browser."""
+        ok, _ = self._exec(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url])
+        return ok
