@@ -52,8 +52,9 @@ class ScrcpyManager:
         """Starts a scrcpy process for a device and docks it into parent_hwnd asynchronously."""
         with self._lock:
             if serial in self.instances and self.instances[serial].is_running:
-                # Already running
-                return True
+                # If process is still alive and running, do nothing
+                if self.instances[serial].process and self.instances[serial].process.poll() is None:
+                    return True
 
             title = f"farm_scrcpy_{serial}"
             instance = ScrcpyInstance(serial, parent_hwnd, title)
@@ -67,6 +68,9 @@ class ScrcpyManager:
             f"--window-title={title}",
             "--window-borderless",
             "--no-audio",
+            "--stay-awake",
+            f"--window-width={width}",
+            f"--window-height={height}",
             f"--max-size={preset['max_size']}",
             f"--max-fps={preset['max_fps']}",
             f"--video-bit-rate={preset['bitrate']}",
@@ -117,12 +121,26 @@ class ScrcpyManager:
 
             instance.hwnd = hwnd
 
+            # Brief pause to let SDL3 / Direct3D 11 texture create before reparenting
+            time.sleep(0.25)
+
             # Perform the Win32 reparenting/docking
             success = dock_window(hwnd, parent_hwnd, width, height)
             if success:
                 instance.is_docked = True
                 if on_docked:
                     on_docked(serial, hwnd)
+
+                # Background watchdog thread to monitor lifetime and notify if disconnected
+                def _watchdog():
+                    p.wait()
+                    poll_code = p.poll()
+                    instance.is_running = False
+                    instance.is_docked = False
+                    if on_error:
+                        on_error(serial, f"Koneksi terputus ({poll_code})")
+
+                threading.Thread(target=_watchdog, daemon=True).start()
             else:
                 if on_error:
                     on_error(serial, "Failed to dock display window")

@@ -123,6 +123,7 @@ class DeviceCard(tk.Frame):
             fg=COLORS["text_secondary"]
         )
         self.placeholder_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        self.placeholder_lbl.bind("<Button-1>", lambda e: self._on_reconnect_click())
 
         # 3. Bottom Modern Navigation Dock
         self.toolbar = tk.Frame(self, bg=COLORS["bg_header"], padx=6, pady=5)
@@ -198,10 +199,15 @@ class DeviceCard(tk.Frame):
         """Displays error on placeholder."""
         if hasattr(self, 'placeholder_lbl') and self.placeholder_lbl and self.placeholder_lbl.winfo_exists():
             self.placeholder_lbl.config(
-                text=f"⚠️ Gagal Memuat:\n{err_text[:35]}",
-                fg=COLORS["accent_red"]
+                text=f"⚠️ {err_text[:30]}\n\n[Klik untuk Coba Lagi]",
+                fg=COLORS["accent_red"],
+                cursor="hand2"
             )
             self.placeholder_lbl.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _on_reconnect_click(self):
+        if self.on_reconnect:
+            self.on_reconnect(self.device.serial)
 
     def set_master(self, is_master: bool):
         self.is_master = is_master
@@ -566,3 +572,361 @@ class BulkTextDialog(tk.Toplevel):
             pady=6
         )
         btn.pack(fill="x")
+
+
+class WiFiConnectDialog(tk.Toplevel):
+    """Modern modal dialog to connect Android devices over Wi-Fi (Wireless ADB)."""
+
+    def __init__(self, parent, adb: ADBManager, devices, on_connected: Optional[Callable[[str], None]] = None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.title("📶 Hubungkan HP via Wi-Fi (Nirkabel)")
+        self.configure(bg=COLORS["bg_root"])
+        self.adb = adb
+        self.devices = devices
+        self.on_connected = on_connected
+        self.transient(parent)
+
+        self._build_ui()
+        center_toplevel(self, parent, 560, 650)
+        self.grab_set()
+
+    def _build_ui(self):
+        header_f = tk.Frame(self, bg=COLORS["bg_header"], padx=18, pady=12)
+        header_f.pack(fill="x")
+
+        lbl_title = tk.Label(
+            header_f,
+            text="📶 Hubungkan HP via Wi-Fi (Nirkabel)",
+            font=("Segoe UI", 12, "bold"),
+            bg=COLORS["bg_header"],
+            fg=COLORS["accent_green"]
+        )
+        lbl_title.pack(anchor="w")
+
+        lbl_desc = tk.Label(
+            header_f,
+            text="Pastikan HP dan Komputer Anda terhubung ke jaringan Wi-Fi / Router yang sama.",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_header"],
+            fg=COLORS["text_secondary"]
+        )
+        lbl_desc.pack(anchor="w", pady=(2, 0))
+
+        body_f = tk.Frame(self, bg=COLORS["bg_root"], padx=18, pady=14)
+        body_f.pack(fill="both", expand=True)
+
+        # ==========================================
+        # SECTION 1: 1-Klik Switch dari USB ke Wi-Fi
+        # ==========================================
+        f_sec1 = tk.LabelFrame(
+            body_f,
+            text=" ⚡ Cara Praktis: Switch dari USB ke Wi-Fi (1-Klik) ",
+            bg=COLORS["bg_card"],
+            fg=COLORS["accent_cyan"],
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=10
+        )
+        f_sec1.pack(fill="x", pady=(0, 14))
+
+        # Check for USB devices
+        usb_devices = [d for d in self.devices if ":" not in d.serial]
+
+        if usb_devices:
+            dev_labels = [f"{d.serial} ({d.model})" for d in usb_devices]
+            self.sel_usb_var = tk.StringVar(value=dev_labels[0])
+
+            lbl_hint1 = tk.Label(
+                f_sec1,
+                text="Pilih HP yang dicolok kabel USB:",
+                font=("Segoe UI", 8),
+                bg=COLORS["bg_card"],
+                fg=COLORS["text_secondary"]
+            )
+            lbl_hint1.pack(anchor="w", pady=(0, 4))
+
+            cb_dev = ttk.Combobox(f_sec1, textvariable=self.sel_usb_var, values=dev_labels, state="readonly")
+            cb_dev.pack(fill="x", pady=(0, 8))
+
+            self.lbl_ip_info = tk.Label(
+                f_sec1,
+                text="🔍 Memeriksa IP Wi-Fi perangkat...",
+                font=("Segoe UI", 8),
+                bg=COLORS["bg_card"],
+                fg=COLORS["text_muted"]
+            )
+            self.lbl_ip_info.pack(anchor="w", pady=(0, 8))
+
+            def _update_detected_ip(*args):
+                sel_text = self.sel_usb_var.get()
+                serial = sel_text.split()[0] if sel_text else None
+                if serial:
+                    def _fetch():
+                        ip = self.adb.get_device_ip(serial)
+                        if ip:
+                            self.after(0, lambda: self.lbl_ip_info.config(
+                                text=f"🌐 IP Wi-Fi Terdeteksi: {ip}",
+                                fg=COLORS["accent_green"]
+                            ))
+                            self.after(0, lambda: self.entry_ip.delete(0, tk.END) or self.entry_ip.insert(0, ip))
+                        else:
+                            self.after(0, lambda: self.lbl_ip_info.config(
+                                text="⚠️ HP belum terhubung ke Wi-Fi!",
+                                fg=COLORS["accent_red"]
+                            ))
+                    threading.Thread(target=_fetch, daemon=True).start()
+
+            cb_dev.bind("<<ComboboxSelected>>", _update_detected_ip)
+            self.after(200, _update_detected_ip)
+
+            self.btn_switch = tk.Button(
+                f_sec1,
+                text="⚡ Aktifkan Mode Wi-Fi & Sambungkan",
+                bg=COLORS["accent_cyan"],
+                fg="#000000",
+                font=("Segoe UI", 9, "bold"),
+                relief="flat",
+                cursor="hand2",
+                pady=5,
+                command=self._switch_usb_to_wifi
+            )
+            self.btn_switch.pack(fill="x")
+        else:
+            lbl_no_usb = tk.Label(
+                f_sec1,
+                text="Tidak ada HP yang terhubung via kabel USB.\nColokkan HP via USB sekali saja untuk mengaktifkan Wi-Fi secara otomatis.",
+                font=("Segoe UI", 8),
+                bg=COLORS["bg_card"],
+                fg=COLORS["text_muted"],
+                justify="left"
+            )
+            lbl_no_usb.pack(anchor="w")
+
+        # ==========================================
+        # SECTION 2: Sambung Manual (IP & Port)
+        # ==========================================
+        f_sec2 = tk.LabelFrame(
+            body_f,
+            text=" 🔗 Sambung Manual ke IP & Port ",
+            bg=COLORS["bg_card"],
+            fg=COLORS["text_white"],
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=10
+        )
+        f_sec2.pack(fill="x")
+
+        f_inputs = tk.Frame(f_sec2, bg=COLORS["bg_card"])
+        f_inputs.pack(fill="x", pady=(0, 8))
+
+        lbl_ip = tk.Label(f_inputs, text="IP Address:", font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_secondary"])
+        lbl_ip.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        lbl_port = tk.Label(f_inputs, text="Port:", font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_secondary"])
+        lbl_port.grid(row=0, column=1, sticky="w")
+
+        self.entry_ip = tk.Entry(f_inputs, bg=COLORS["bg_input"], fg=COLORS["text_white"], font=("Segoe UI", 9), relief="flat")
+        self.entry_ip.grid(row=1, column=0, sticky="ew", padx=(0, 8), ipady=3)
+        self.entry_ip.insert(0, "192.168.1.")
+
+        self.entry_port = tk.Entry(f_inputs, bg=COLORS["bg_input"], fg=COLORS["text_white"], font=("Segoe UI", 9), relief="flat", width=8)
+        self.entry_port.grid(row=1, column=1, sticky="w", ipady=3)
+        self.entry_port.insert(0, "5555")
+
+        f_inputs.columnconfigure(0, weight=1)
+
+        self.btn_manual = tk.Button(
+            f_sec2,
+            text="🔌 Hubungkan Nirkabel",
+            bg=COLORS["accent_blue"],
+            fg="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+            command=self._manual_connect
+        )
+        self.btn_manual.pack(fill="x")
+
+        # ==========================================
+        # SECTION 3: Pairing Nirkabel (Android 11+ Murni Tanpa USB)
+        # ==========================================
+        f_sec3 = tk.LabelFrame(
+            body_f,
+            text=" 🔒 Android 11+ Wireless Pairing (Murni Tanpa USB) ",
+            bg=COLORS["bg_card"],
+            fg=COLORS["accent_yellow"],
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=10
+        )
+        f_sec3.pack(fill="x", pady=(12, 0))
+
+        lbl_pair_desc = tk.Label(
+            f_sec3,
+            text="Di HP: Buka Opsi Pengembang > Debugging Nirkabel > 'Pasangkan dengan kode'",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_card"],
+            fg=COLORS["text_secondary"]
+        )
+        lbl_pair_desc.pack(anchor="w", pady=(0, 6))
+
+        f_pair_inputs = tk.Frame(f_sec3, bg=COLORS["bg_card"])
+        f_pair_inputs.pack(fill="x", pady=(0, 8))
+
+        lbl_p_ip = tk.Label(f_pair_inputs, text="IP & Port Pairing:", font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_secondary"])
+        lbl_p_ip.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        lbl_p_code = tk.Label(f_pair_inputs, text="Kode 6-Digit:", font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_secondary"])
+        lbl_p_code.grid(row=0, column=1, sticky="w")
+
+        self.entry_pair_addr = tk.Entry(f_pair_inputs, bg=COLORS["bg_input"], fg=COLORS["text_white"], font=("Segoe UI", 9), relief="flat")
+        self.entry_pair_addr.grid(row=1, column=0, sticky="ew", padx=(0, 8), ipady=3)
+        self.entry_pair_addr.insert(0, "192.168.1.9:")
+
+        self.entry_pair_code = tk.Entry(f_pair_inputs, bg=COLORS["bg_input"], fg=COLORS["text_white"], font=("Segoe UI", 9), relief="flat", width=12)
+        self.entry_pair_code.grid(row=1, column=1, sticky="w", ipady=3)
+
+        f_pair_inputs.columnconfigure(0, weight=1)
+
+        self.btn_pair = tk.Button(
+            f_sec3,
+            text="🤝 Pasangkan (Pair Device)",
+            bg=COLORS["accent_yellow"],
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            cursor="hand2",
+            pady=5,
+            command=self._pair_wireless
+        )
+        self.btn_pair.pack(fill="x")
+
+        # Status / Feedback label
+        self.lbl_feedback = tk.Label(
+            body_f,
+            text="",
+            font=("Segoe UI", 9),
+            bg=COLORS["bg_root"],
+            fg=COLORS["accent_green"],
+            wraplength=520,
+            justify="center"
+        )
+        self.lbl_feedback.pack(pady=(12, 0))
+
+    def _switch_usb_to_wifi(self):
+        sel_text = getattr(self, "sel_usb_var", None)
+        if not sel_text:
+            return
+        serial = sel_text.get().split()[0]
+        if not serial:
+            return
+
+        self.btn_switch.config(state="disabled", text="⏳ Mengaktifkan Mode TCP/IP...")
+        self.lbl_feedback.config(text="Memulai mode TCP/IP pada HP...", fg=COLORS["text_secondary"])
+
+        def _worker():
+            # 1. Get device IP
+            ip = self.adb.get_device_ip(serial)
+            if not ip:
+                self.after(0, lambda: self.lbl_feedback.config(
+                    text="❌ Gagal: HP belum terhubung ke Wi-Fi atau IP tidak ditemukan!",
+                    fg=COLORS["accent_red"]
+                ))
+                self.after(0, lambda: self.btn_switch.config(state="normal", text="⚡ Aktifkan Mode Wi-Fi & Sambungkan"))
+                return
+
+            # 2. adb tcpip 5555
+            ok, out = self.adb.enable_tcpip(serial, 5555)
+            if not ok:
+                self.after(0, lambda: self.lbl_feedback.config(
+                    text=f"❌ Gagal mengaktifkan port TCP/IP: {out}",
+                    fg=COLORS["accent_red"]
+                ))
+                self.after(0, lambda: self.btn_switch.config(state="normal", text="⚡ Aktifkan Mode Wi-Fi & Sambungkan"))
+                return
+
+            time.sleep(1.0)
+
+            # 3. adb connect IP:5555
+            self.after(0, lambda: self.lbl_feedback.config(
+                text=f"Menyambungkan ke {ip}:5555...",
+                fg=COLORS["text_secondary"]
+            ))
+            ok_c, out_c = self.adb.connect_wireless(ip, 5555)
+
+            if ok_c and ("connected" in out_c.lower() or "already" in out_c.lower()):
+                msg = f"🎉 Berhasil terhubung ke {ip}:5555!\nKabel USB sekarang aman dicabut. Layar Wi-Fi akan otomatis muncul."
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_green"]))
+                if self.on_connected:
+                    self.on_connected(f"{ip}:5555")
+            else:
+                msg = f"⚠️ Respon ADB: {out_c}\nPastikan PC dan HP dalam satu jaringan Wi-Fi."
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_yellow"]))
+
+            self.after(0, lambda: self.btn_switch.config(state="normal", text="⚡ Aktifkan Mode Wi-Fi & Sambungkan"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _manual_connect(self):
+        ip = self.entry_ip.get().strip()
+        port_str = self.entry_port.get().strip() or "5555"
+
+        if not ip or ip == "192.168.1.":
+            self.lbl_feedback.config(text="Masukkan alamat IP HP yang valid!", fg=COLORS["accent_red"])
+            return
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            self.lbl_feedback.config(text="Port harus berupa angka!", fg=COLORS["accent_red"])
+            return
+
+        self.btn_manual.config(state="disabled", text="⏳ Menyambungkan...")
+        self.lbl_feedback.config(text=f"Menghubungkan ke {ip}:{port}...", fg=COLORS["text_secondary"])
+
+        def _worker():
+            ok, out = self.adb.connect_wireless(ip, port)
+            if ok and ("connected" in out.lower() or "already" in out.lower()):
+                msg = f"🎉 Berhasil terhubung ke {ip}:{port}!"
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_green"]))
+                if self.on_connected:
+                    self.on_connected(f"{ip}:{port}")
+            else:
+                msg = f"❌ Gagal: {out}\nPeriksa IP, Port, dan pastikan Wi-Fi aktif."
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_red"]))
+
+            self.after(0, lambda: self.btn_manual.config(state="normal", text="🔌 Hubungkan Nirkabel"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _pair_wireless(self):
+        addr = self.entry_pair_addr.get().strip()
+        code = self.entry_pair_code.get().strip()
+        if not addr or ":" not in addr or not code:
+            self.lbl_feedback.config(text="Masukkan IP:Port Pairing dan Kode 6-digit!", fg=COLORS["accent_red"])
+            return
+
+        ip, port_str = addr.split(":", 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            self.lbl_feedback.config(text="Port pairing harus angka!", fg=COLORS["accent_red"])
+            return
+
+        self.btn_pair.config(state="disabled", text="⏳ Memasangkan...")
+        self.lbl_feedback.config(text=f"Memasangkan ke {addr}...", fg=COLORS["text_secondary"])
+
+        def _worker():
+            ok, out = self.adb.pair_wireless(ip, port, code)
+            if ok and "success" in out.lower():
+                msg = f"🎉 Berhasil dipasangkan ke {ip}!\nSekarang lihat 'Alamat IP & Port' di halaman utama Debugging Nirkabel HP,\nmasukkan ke kolom 'Sambung Manual' di atas lalu klik 'Hubungkan Nirkabel'."
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_green"]))
+                self.after(0, lambda: self.entry_ip.delete(0, tk.END) or self.entry_ip.insert(0, ip))
+            else:
+                msg = f"❌ Gagal Pairing: {out}\nPastikan kode dan port pairing masih aktif di HP."
+                self.after(0, lambda: self.lbl_feedback.config(text=msg, fg=COLORS["accent_red"]))
+
+            self.after(0, lambda: self.btn_pair.config(state="normal", text="🤝 Pasangkan (Pair Device)"))
+
+        threading.Thread(target=_worker, daemon=True).start()

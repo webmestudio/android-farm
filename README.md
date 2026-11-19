@@ -49,7 +49,12 @@ Jika Anda mengubah source code dan ingin mengompilasi ulang menjadi single-file 
 - Mengetik, klik, dan swipe mouse langsung direspons oleh engine scrcpy tanpa transcoding atau buffer video perantara.
 - Latensi ultra-rendah ~35ms.
 
-### 3. Sync Action / Broadcast Control (Multi-Control)
+### 3. Koneksi Wi-Fi / Nirkabel (Wireless ADB)
+- Klik tombol **`📶 Wi-Fi`** di header toolbar.
+- **1-Klik Switch dari USB ke Wi-Fi:** Colok HP via kabel USB sekali saja, dashboard otomatis mendeteksi IP lokal HP (misal `192.168.1.9`), mengaktifkan port TCP/IP, dan menghubungkannya via Wi-Fi. Setelah berhasil, kabel USB bisa langsung dicabut dan mirroring tetap berjalan lancar!
+- **Koneksi Manual:** Anda juga bisa memasukkan IP dan Port secara langsung tanpa mencolokkan kabel.
+
+### 4. Sync Action / Broadcast Control (Multi-Control)
 - Centang opsi **`🔴 Sync Action`** di toolbar atas.
 - Pilih salah satu HP sebagai **Master** (klik tombol `👑 Master` pada HP tersebut).
 - Semua tombol navigasi yang Anda tekan (Home, Back, Recents, Screen Off) serta teks yang Anda ketik akan diduplikasi serentak ke seluruh HP lainnya!

@@ -29,7 +29,9 @@ from src.config import (
 from src.adb_manager import ADBManager, ADBDevice
 from src.scrcpy_manager import ScrcpyManager
 from src.sync_engine import SyncEngine
-from src.ui_components import DeviceCard, BulkInstallDialog, BulkShellDialog, BulkTextDialog
+from src.ui_components import (
+    DeviceCard, BulkInstallDialog, BulkShellDialog, BulkTextDialog, WiFiConnectDialog
+)
 
 
 class PhoneFarmApp(tk.Tk):
@@ -226,6 +228,9 @@ class PhoneFarmApp(tk.Tk):
         btn_pwr = _make_act_btn(f_right, "⚡ Power", COLORS["bg_surface"], COLORS["text_white"], self._bulk_power)
         btn_pwr.pack(side="left", padx=2)
 
+        btn_wifi = _make_act_btn(f_right, "📶 Wi-Fi", COLORS["accent_green"], "#000000", self._open_wifi_dialog)
+        btn_wifi.pack(side="left", padx=2)
+
         # More Actions Menu
         btn_more = tk.Menubutton(
             f_right,
@@ -242,6 +247,8 @@ class PhoneFarmApp(tk.Tk):
         btn_more.pack(side="left", padx=2)
 
         menu_more = tk.Menu(btn_more, tearoff=0, bg=COLORS["bg_card"], fg=COLORS["text_white"], activebackground=COLORS["border_glow"])
+        menu_more.add_command(label="📶 Hubungkan HP via Wi-Fi...", command=self._open_wifi_dialog)
+        menu_more.add_separator()
         menu_more.add_command(label="🏠 Tekan HOME di Semua HP", command=self._bulk_home)
         menu_more.add_command(label="◀ Tekan BACK di Semua HP", command=self._bulk_back)
         menu_more.add_command(label="☀️ Hidupkan Layar Semua HP", command=self._bulk_screen_on)
@@ -479,14 +486,15 @@ class PhoneFarmApp(tk.Tk):
         self._update_layout()
 
     def _add_device_card(self, device: ADBDevice):
-        # Auto-wake sleeping device so display immediately outputs video
-        threading.Thread(target=self.adb.turn_screen_on, args=(device.serial,), daemon=True).start()
+        # Ensure screen is awake before initializing scrcpy
+        self.adb.ensure_screen_awake(device.serial)
 
         card = DeviceCard(
             self.grid_frame,
             device=device,
             adb=self.adb,
             on_set_master=self._set_master_device,
+            on_reconnect=lambda s=device.serial: self._reconnect_device(s),
         )
         self.device_cards[device.serial] = card
 
@@ -516,6 +524,34 @@ class PhoneFarmApp(tk.Tk):
             on_docked=_on_docked,
             on_error=_on_error
         )
+
+    def _reconnect_device(self, serial: str):
+        card = self.device_cards.get(serial)
+        if not card:
+            return
+        card.show_loading("Menyambungkan ulang...")
+        self.scrcpy.stop_device(serial)
+        dev = next((d for d in self.devices if d.serial == serial), None)
+        if dev:
+            self.adb.ensure_screen_awake(serial)
+            parent_hwnd = card.get_container_hwnd()
+
+            def _on_docked(s, h):
+                self.after(0, card.hide_placeholder)
+                self.after(0, lambda: self._log_status(f"✅ {s} ({dev.model}) terhubung kembali"))
+
+            def _on_error(s, err):
+                self.after(0, lambda: card.show_error(err))
+                self.after(0, lambda: self._log_status(f"❌ Error pada {s}: {err}"))
+
+            self.scrcpy.start_device(
+                serial,
+                parent_hwnd,
+                card.cell_width,
+                card.cell_height,
+                on_docked=_on_docked,
+                on_error=_on_error
+            )
 
     def _reposition_cards(self):
         """Arranges cards in a neat responsive grid without horizontal stretching."""
@@ -553,6 +589,14 @@ class PhoneFarmApp(tk.Tk):
             on_sent=lambda txt: self._log_status(f"Mengirim teks '{txt}' ke {len(self.devices)} HP")
         )
 
+    def _open_wifi_dialog(self):
+        WiFiConnectDialog(
+            self,
+            self.adb,
+            self.devices,
+            on_connected=lambda target: (self._manual_scan(), self._log_status(f"🌐 Terhubung ke Wi-Fi ADB: {target}"))
+        )
+
     def _bulk_home(self):
         if self.devices:
             self.sync.broadcast_home(self.devices)
@@ -572,6 +616,11 @@ class PhoneFarmApp(tk.Tk):
         if self.devices:
             self.sync.broadcast_screen_on(self.devices)
             self._log_status("Menghidupkan layar seluruh HP")
+            # Auto-reconnect any device whose display stream died
+            for d in self.devices:
+                inst = self.scrcpy.instances.get(d.serial)
+                if not inst or not inst.is_running or (inst.process and inst.process.poll() is not None):
+                    self.after(500, lambda s=d.serial: self._reconnect_device(s))
 
     def _bulk_power(self):
         if self.devices:

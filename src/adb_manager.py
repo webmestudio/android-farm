@@ -2,6 +2,7 @@
 
 import subprocess
 import re
+import time
 from typing import List, Dict, Optional, Tuple
 from .config import ADB_EXE
 
@@ -138,6 +139,22 @@ class ADBManager:
         """Wakes screen up (KEYCODE_WAKEUP = 224)."""
         return self.send_key(serial, 224)
 
+    def ensure_screen_awake(self, serial: str) -> bool:
+        """Ensures the device screen is powered on, unlocked, and stays awake."""
+        # Configure device to stay awake while charging / USB connected (Phone Farm mode)
+        self._exec(["-s", serial, "shell", "svc", "power", "stayon", "true"])
+        self._exec(["-s", serial, "shell", "settings", "put", "system", "screen_off_timeout", "1800000"])
+        ok, out = self._exec(["-s", serial, "shell", "dumpsys", "power"])
+        if ok and ("mWakefulness=Asleep" in out or "mWakefulness=Dozing" in out):
+            self.turn_screen_on(serial)
+            self._exec(["-s", serial, "shell", "wm", "dismiss-keyguard"])
+            self.send_key(serial, 82)
+            time.sleep(0.3)
+            return True
+        elif not ok:
+            self.turn_screen_on(serial)
+        return False
+
     def send_tap(self, serial: str, x: int, y: int) -> bool:
         """Sends touch tap event to specific coordinates."""
         ok, _ = self._exec(["-s", serial, "shell", "input", "tap", str(x), str(y)])
@@ -172,3 +189,37 @@ class ADBManager:
         """Opens URL in device browser."""
         ok, _ = self._exec(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url])
         return ok
+
+    def get_device_ip(self, serial: str) -> Optional[str]:
+        """Fetches device local Wi-Fi IPv4 address."""
+        ok, out = self._exec(["-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"])
+        if ok and out:
+            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
+            if m:
+                return m.group(1)
+
+        # Fallback to ip route or getprop
+        ok, out = self._exec(["-s", serial, "shell", "ip", "route"])
+        if ok and out:
+            m = re.search(r"src\s+(\d+\.\d+\.\d+\.\d+)", out)
+            if m:
+                return m.group(1)
+        return None
+
+    def enable_tcpip(self, serial: str, port: int = 5555) -> Tuple[bool, str]:
+        """Switches device ADB daemon to TCP/IP listening on specified port."""
+        return self._exec(["-s", serial, "tcpip", str(port)])
+
+    def connect_wireless(self, ip: str, port: int = 5555) -> Tuple[bool, str]:
+        """Connects to a device over Wi-Fi TCP/IP."""
+        target = f"{ip.strip()}:{port}"
+        return self._exec(["connect", target], timeout=15.0)
+
+    def pair_wireless(self, ip: str, port: int, pairing_code: str) -> Tuple[bool, str]:
+        """Pairs with a device over Android 11+ wireless debugging."""
+        target = f"{ip.strip()}:{port}"
+        return self._exec(["pair", target, str(pairing_code).strip()], timeout=15.0)
+
+    def disconnect_wireless(self, target: str) -> Tuple[bool, str]:
+        """Disconnects wireless ADB device."""
+        return self._exec(["disconnect", target.strip()])
