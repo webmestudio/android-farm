@@ -2,6 +2,8 @@
 
 Aplikasi Desktop terpadu untuk mengelola dan memantau **1 hingga 20 perangkat Android** secara bersamaan dalam satu jendela dashboard tanpa lag.
 
+![Phone Farm Dashboard Preview](screenshoot/a1.PNG)
+
 Menggunakan teknik **Native Win32 Docking** yang langsung meng-embed engine `scrcpy` asli ke dalam panel grid. Hasilnya, performa video rendering (Direct3D 11 Hardware Decoding) dan responsivitas remote sentuhan **100% identik dengan scrcpy asli (latensi ~35ms, bebas lag)**.
 
 ---
@@ -98,6 +100,8 @@ Anda dapat memilih preset di dropdown toolbar atas sesuai jumlah HP yang Anda ja
 android-farm/
 ├── dist/                      # Folder output Portable Executable
 │   └── PhoneFarmDashboard.exe # 📦 Portable EXE Mandiri (Zero-Install)
+├── screenshoot/               # Screenshot Tampilan Dashboard
+│   └── a1.PNG
 ├── bin/                       # Engine scrcpy v5.0.1 & ADB binaries (Win64)
 │   ├── scrcpy.exe
 │   ├── scrcpy-server
