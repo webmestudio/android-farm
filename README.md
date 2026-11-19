@@ -54,19 +54,29 @@ Jika Anda mengubah source code dan ingin mengompilasi ulang menjadi single-file 
 - **1-Klik Switch dari USB ke Wi-Fi:** Colok HP via kabel USB sekali saja, dashboard otomatis mendeteksi IP lokal HP (misal `192.168.1.9`), mengaktifkan port TCP/IP, dan menghubungkannya via Wi-Fi. Setelah berhasil, kabel USB bisa langsung dicabut dan mirroring tetap berjalan lancar!
 - **Koneksi Manual:** Anda juga bisa memasukkan IP dan Port secara langsung tanpa mencolokkan kabel.
 
-### 4. Sync Action / Broadcast Control (Multi-Control)
-- Centang opsi **`🔴 Sync Action`** di toolbar atas.
-- Pilih salah satu HP sebagai **Master** (klik tombol `👑 Master` pada HP tersebut).
-- Semua tombol navigasi yang Anda tekan (Home, Back, Recents, Screen Off) serta teks yang Anda ketik akan diduplikasi serentak ke seluruh HP lainnya!
+### 4. Sync Action & Filter Target HP (Multi-Control Bebas Salah Sasaran)
+- **Tombol `[☑ Sync] / [☐ Skip]` di Setiap Kartu:**
+  Anda bebas memilih dan mencentang HP mana saja yang ingin disertakan dalam sinkronisasi. HP yang berbeda tipe atau OS bisa dimatikan centangnya agar tidak terganggu.
+- **Menu Pintas `🎯 Filter Sync ▾` (Solusi Beda Merek / OS):**
+  - **☑️ Pilih Semua HP**: Menyertakan seluruh perangkat yang online.
+  - **⬜ Batal Pilih Semua**: Mengecualikan seluruh slave (hanya Master).
+  - **🤖 Pilih OS Sama**: Otomatis hanya mencentang HP dengan versi Android yang sama dengan Master (misal sesama Android 13).
+  - **📐 Pilih Resolusi Sama**: Otomatis hanya mencentang HP dengan ukuran layar identik (misal sesama 720x1600).
+  - **📱 Pilih Merek Sama**: Otomatis hanya mencentang HP dari pabrikan yang sama (misal sesama Redmi).
+  - **✨ Pilih Identik**: Filter otomatis paling aman yang memastikan Merek, OS, dan Resolusi layar 100% sama dengan Master.
+- **Live Touch & Swipe Screen Mirroring (Sentuhan Mouse Real-Time):**
+  Ketika **`🔴 Sync Action`** aktif, setiap klik (*tap*) atau geser (*swipe*) mouse Anda langsung di dalam layar video HP Master otomatis dihitung koordinat proporsionalnya $(X\%, Y\%)$ dan diduplikasikan ke seluruh HP target yang dicentang `[☑ Sync]` secara paralel!
+- **Sinkronisasi Navigasi Tombol Fisik:**
+  Tekan tombol navigasi (`Home`, `Back`, `Recents`, `Power`) di kartu HP Master — seluruh target HP yang dicentang akan merespons serentak!
 
-### 4. Manajemen Massal (Bulk Tools)
-Di menu **`⚡ Manajemen Massal ▼`**:
-- **📦 Bulk Install APK:** Pilih file `.apk` di PC, otomatis terinstall serentak ke 20 HP dengan status progress real-time.
-- **💻 Bulk Shell Command:** Jalankan satu baris perintah `adb shell` (misal buka aplikasi, clear cache, cek konfigurasi) ke seluruh HP sekaligus.
-- **📝 Broadcast Teks:** Ketik teks di PC dan tekan Enter untuk mengetikkannya ke seluruh HP.
-- **⚡ Matikan Layar Fisik Semua HP:** Mematikan layar AMOLED/LCD fisik HP agar hemat daya dan tidak panas, namun mirroring di dashboard tetap hidup!
-- **☀️ Hidupkan Layar Fisik Semua HP:** Membangunkan kembali layar HP.
-- **🔄 Reboot Seluruh HP:** Merestart semua perangkat secara paralel.
+### 5. Manajemen Massal (Bulk Tools)
+Di menu toolbar & **`⋮ Menu`**:
+- **📦 Bulk Install APK:** Pilih file `.apk` di PC, otomatis terinstall serentak ke HP target sync dengan status progress real-time dan detail OS/resolusi.
+- **💻 Bulk Shell Command:** Jalankan satu baris perintah `adb shell` (misal buka aplikasi, clear cache, cek konfigurasi) ke HP target sync sekaligus.
+- **📝 Broadcast Teks:** Ketik teks di PC dan tekan Enter untuk mengetikkannya ke HP target sync serentak.
+- **⚡ Matikan Layar Fisik HP:** Mematikan layar AMOLED/LCD fisik HP target agar hemat daya dan tidak panas, namun mirroring di dashboard tetap hidup!
+- **☀️ Hidupkan Layar Fisik HP:** Membangunkan kembali layar HP target.
+- **🔄 Reboot HP:** Merestart seluruh HP target terpilih secara paralel.
 
 ---
 

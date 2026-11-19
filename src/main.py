@@ -6,6 +6,9 @@ import threading
 import time
 import os
 import sys
+import math
+import ctypes
+from ctypes import wintypes
 
 # Guard stdout/stderr when packaged with PyInstaller --noconsole
 if sys.stdout is None:
@@ -63,6 +66,7 @@ class PhoneFarmApp(tk.Tk):
         # State
         self.device_cards = {}  # serial -> DeviceCard
         self.devices = []       # List[ADBDevice]
+        self.sync_target_serials = set()  # set of serials selected for sync
         self.current_columns = DEFAULT_COLUMNS
         self.master_serial = None
         self.sync_enabled = False
@@ -80,71 +84,102 @@ class PhoneFarmApp(tk.Tk):
         # Start periodic ADB device scanner
         self.after(500, self._start_device_scanner)
 
+        # Start live touch & swipe sync tracker for Master screen
+        threading.Thread(target=self._touch_tracker_loop, daemon=True).start()
+
     def _build_header(self):
-        self.header_frame = tk.Frame(self, bg=COLORS["bg_header"], padx=18, pady=10)
+        self.header_frame = tk.Frame(self, bg=COLORS["bg_header"], padx=14, pady=8)
         self.header_frame.pack(fill="x", side="top")
 
-        # 1. Left: Brand & Live Badges
+        # 1. Left: Live Status & Target Selection Telemetry
         f_left = tk.Frame(self.header_frame, bg=COLORS["bg_header"])
         f_left.pack(side="left")
 
-        lbl_logo = tk.Label(
-            f_left,
-            text="⚡ PHONE FARM",
-            font=("Segoe UI", 13, "bold"),
-            bg=COLORS["bg_header"],
-            fg=COLORS["accent_cyan"]
-        )
-        lbl_logo.pack(side="left")
-
-        # Version Pill
-        lbl_ver = tk.Label(
-            f_left,
-            text="v5.0.1",
-            font=("Segoe UI", 8, "bold"),
-            bg=COLORS["bg_surface"],
-            fg=COLORS["text_secondary"],
-            padx=6,
-            pady=1
-        )
-        lbl_ver.pack(side="left", padx=(6, 12))
-
-        # Device Count Chip
-        self.f_count = tk.Frame(f_left, bg="#132E27", padx=8, pady=3)
-        self.f_count.pack(side="left", padx=(0, 8))
+        # Device Count Chip (Emerald Pill)
+        self.f_count = tk.Frame(f_left, bg="#10231D", padx=9, pady=4)
+        self.f_count.pack(side="left", padx=(0, 6))
 
         self.lbl_count = tk.Label(
             self.f_count,
             text="● 0 HP Online",
             font=("Segoe UI", 9, "bold"),
-            bg="#132E27",
-            fg=COLORS["accent_green"]
+            bg="#10231D",
+            fg="#34D399"
         )
         self.lbl_count.pack()
 
-        # Master Chip
-        self.f_master = tk.Frame(f_left, bg=COLORS["bg_surface"], padx=8, pady=3)
-        self.f_master.pack(side="left")
+        # Master Chip (Amber Gold Pill)
+        self.f_master = tk.Frame(f_left, bg="#1E2235", padx=9, pady=4)
+        self.f_master.pack(side="left", padx=(0, 6))
 
         self.lbl_master_chip = tk.Label(
             self.f_master,
             text="👑 Master: -",
             font=("Segoe UI", 8, "bold"),
-            bg=COLORS["bg_surface"],
+            bg="#1E2235",
             fg=COLORS["text_secondary"]
         )
         self.lbl_master_chip.pack()
+
+        # Target Sync Chip (Cyan Pill)
+        self.f_sync_targets = tk.Frame(f_left, bg="#0E242B", padx=9, pady=4)
+        self.f_sync_targets.pack(side="left", padx=(0, 4))
+
+        self.lbl_sync_targets = tk.Label(
+            self.f_sync_targets,
+            text="🎯 Target: 0/0 HP",
+            font=("Segoe UI", 9, "bold"),
+            bg="#0E242B",
+            fg="#38BDF8"
+        )
+        self.lbl_sync_targets.pack()
+
+        # Target Filter Menu Dropdown (Grouped right beside Target Chip)
+        self.btn_filter = tk.Menubutton(
+            f_left,
+            text="🎯 Filter Sync ▾",
+            bg=COLORS["bg_surface"],
+            fg="#38BDF8",
+            activebackground=COLORS["bg_card_hover"],
+            activeforeground="#38BDF8",
+            relief="flat",
+            bd=0,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=4,
+            cursor="hand2"
+        )
+        self.btn_filter.pack(side="left", padx=(0, 6))
+        self.btn_filter.bind("<Enter>", lambda e: self.btn_filter.config(bg=COLORS["bg_card_hover"]))
+        self.btn_filter.bind("<Leave>", lambda e: self.btn_filter.config(bg=COLORS["bg_surface"]))
+
+        self.menu_filter = tk.Menu(
+            self.btn_filter,
+            tearoff=0,
+            bg=COLORS["bg_card"],
+            fg=COLORS["text_white"],
+            activebackground=COLORS["border_glow"]
+        )
+        self.menu_filter.add_command(label="☑️ Pilih Semua HP", command=self._select_all_targets)
+        self.menu_filter.add_command(label="⬜ Batal Pilih Semua (Hanya Master)", command=self._deselect_all_targets)
+        self.menu_filter.add_separator()
+        self.menu_filter.add_command(label="🤖 Pilih OS Sama dengan Master", command=self._filter_same_os)
+        self.menu_filter.add_command(label="📐 Pilih Resolusi Sama dengan Master", command=self._filter_same_resolution)
+        self.menu_filter.add_command(label="📱 Pilih Merek Sama dengan Master", command=self._filter_same_brand)
+        self.menu_filter.add_separator()
+        self.menu_filter.add_command(label="✨ Pilih Identik (Merek, OS & Layar Sama)", command=self._filter_exact_match)
+        self.btn_filter["menu"] = self.menu_filter
 
         # 2. Right: Action Controls & Layout Pills
         f_right = tk.Frame(self.header_frame, bg=COLORS["bg_header"])
         f_right.pack(side="right")
 
         # Grid Columns Selector (Segmented buttons)
-        f_cols = tk.Frame(f_right, bg=COLORS["bg_surface"], padx=3, pady=3)
-        f_cols.pack(side="left", padx=(0, 12))
+        f_cols = tk.Frame(f_right, bg="#161926", padx=3, pady=2)
+        f_cols.pack(side="left", padx=(0, 8))
 
-        lbl_col_tag = tk.Label(f_cols, text="Kolom:", font=("Segoe UI", 8), bg=COLORS["bg_surface"], fg=COLORS["text_muted"])
-        lbl_col_tag.pack(side="left", padx=(4, 6))
+        lbl_col_tag = tk.Label(f_cols, text="Kolom:", font=("Segoe UI", 8), bg="#161926", fg=COLORS["text_muted"])
+        lbl_col_tag.pack(side="left", padx=(4, 4))
 
         self.col_btns = {}
         for num in (2, 3, 4, 5, 6):
@@ -155,7 +190,7 @@ class PhoneFarmApp(tk.Tk):
                 relief="flat",
                 bd=0,
                 cursor="hand2",
-                padx=6,
+                padx=5,
                 pady=1,
                 command=lambda n=num: self._set_columns(n)
             )
@@ -172,93 +207,101 @@ class PhoneFarmApp(tk.Tk):
             f_right,
             textvariable=self.preset_var,
             values=list(QUALITY_PRESETS.keys()),
-            width=16,
+            width=15,
             state="readonly"
         )
-        cb_preset.pack(side="left", padx=(0, 12))
+        cb_preset.pack(side="left", padx=(0, 8))
         cb_preset.bind("<<ComboboxSelected>>", lambda e: self.scrcpy.set_preset(self.preset_var.get()))
 
-        # Sync Action Toggle Button (Modern Pill)
+        # Sync Action Toggle Button (Modern Sleek Pill)
         self.btn_sync = tk.Button(
             f_right,
             text="⚪ Sync Action: OFF",
             command=self._toggle_sync,
             bg=COLORS["bg_surface"],
             fg=COLORS["text_secondary"],
-            activebackground=COLORS["accent_yellow"],
-            activeforeground="#000000",
+            activebackground="#282F48",
+            activeforeground="#ffffff",
             relief="flat",
             bd=0,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             cursor="hand2",
-            padx=10,
-            pady=4
+            padx=9,
+            pady=3
         )
-        self.btn_sync.pack(side="left", padx=(0, 10))
+        self.btn_sync.pack(side="left", padx=(0, 8))
 
-        # Quick Action Buttons
-        def _make_act_btn(parent, text, bg_color, fg_color, cmd):
+        # Quick Action Buttons Builder with Unified Modern Dark Styling
+        def _make_action_btn(parent, text, cmd):
             b = tk.Button(
                 parent,
                 text=text,
                 command=cmd,
-                bg=bg_color,
-                fg=fg_color,
+                bg=COLORS["bg_surface"],
+                fg=COLORS["text_white"],
+                activebackground=COLORS["bg_card_hover"],
+                activeforeground="#ffffff",
                 relief="flat",
                 bd=0,
-                font=("Segoe UI", 9, "bold"),
+                font=("Segoe UI", 8, "bold"),
                 cursor="hand2",
-                padx=9,
-                pady=4
+                padx=7,
+                pady=3
             )
+            b.bind("<Enter>", lambda e, btn=b: btn.config(bg=COLORS["bg_card_hover"]))
+            b.bind("<Leave>", lambda e, btn=b: btn.config(bg=COLORS["bg_surface"]))
             return b
 
-        btn_apk = _make_act_btn(f_right, "📦 APK", COLORS["accent_blue"], "#ffffff", self._open_bulk_install)
-        btn_apk.pack(side="left", padx=2)
+        btn_apk = _make_action_btn(f_right, "📦 APK", self._open_bulk_install)
+        btn_apk.pack(side="left", padx=1)
 
-        btn_shell = _make_act_btn(f_right, "💻 Shell", COLORS["accent_purple"], "#ffffff", self._open_bulk_shell)
-        btn_shell.pack(side="left", padx=2)
+        btn_shell = _make_action_btn(f_right, "💻 Shell", self._open_bulk_shell)
+        btn_shell.pack(side="left", padx=1)
 
-        btn_txt = _make_act_btn(f_right, "📝 Teks", COLORS["accent_cyan"], "#000000", self._open_bulk_text)
-        btn_txt.pack(side="left", padx=2)
+        btn_txt = _make_action_btn(f_right, "📝 Teks", self._open_bulk_text)
+        btn_txt.pack(side="left", padx=1)
 
-        btn_wake = _make_act_btn(f_right, "☀️ Bangunkan", COLORS["accent_orange"], "#000000", self._bulk_screen_on)
-        btn_wake.pack(side="left", padx=2)
+        btn_wake = _make_action_btn(f_right, "☀️ Layar", self._bulk_screen_on)
+        btn_wake.pack(side="left", padx=1)
 
-        btn_pwr = _make_act_btn(f_right, "⚡ Power", COLORS["bg_surface"], COLORS["text_white"], self._bulk_power)
-        btn_pwr.pack(side="left", padx=2)
+        btn_pwr = _make_action_btn(f_right, "⚡ Power", self._bulk_power)
+        btn_pwr.pack(side="left", padx=1)
 
-        btn_wifi = _make_act_btn(f_right, "📶 Wi-Fi", COLORS["accent_green"], "#000000", self._open_wifi_dialog)
-        btn_wifi.pack(side="left", padx=2)
+        btn_wifi = _make_action_btn(f_right, "📶 Wi-Fi", self._open_wifi_dialog)
+        btn_wifi.pack(side="left", padx=1)
 
         # More Actions Menu
         btn_more = tk.Menubutton(
             f_right,
             text="⋮ Menu",
             bg=COLORS["bg_surface"],
-            fg=COLORS["text_primary"],
+            fg=COLORS["text_white"],
+            activebackground=COLORS["bg_card_hover"],
+            activeforeground="#ffffff",
             relief="flat",
             bd=0,
-            font=("Segoe UI", 9, "bold"),
-            padx=8,
-            pady=4,
+            font=("Segoe UI", 8, "bold"),
+            padx=7,
+            pady=3,
             cursor="hand2"
         )
-        btn_more.pack(side="left", padx=2)
+        btn_more.pack(side="left", padx=1)
+        btn_more.bind("<Enter>", lambda e: btn_more.config(bg=COLORS["bg_card_hover"]))
+        btn_more.bind("<Leave>", lambda e: btn_more.config(bg=COLORS["bg_surface"]))
 
         menu_more = tk.Menu(btn_more, tearoff=0, bg=COLORS["bg_card"], fg=COLORS["text_white"], activebackground=COLORS["border_glow"])
         menu_more.add_command(label="📶 Hubungkan HP via Wi-Fi...", command=self._open_wifi_dialog)
         menu_more.add_separator()
-        menu_more.add_command(label="🏠 Tekan HOME di Semua HP", command=self._bulk_home)
-        menu_more.add_command(label="◀ Tekan BACK di Semua HP", command=self._bulk_back)
-        menu_more.add_command(label="☀️ Hidupkan Layar Semua HP", command=self._bulk_screen_on)
+        menu_more.add_command(label="🏠 Tekan HOME di Target HP", command=self._bulk_home)
+        menu_more.add_command(label="◀ Tekan BACK di Target HP", command=self._bulk_back)
+        menu_more.add_command(label="☀️ Hidupkan Layar Target HP", command=self._bulk_screen_on)
         menu_more.add_separator()
-        menu_more.add_command(label="🔄 Reboot Seluruh HP", command=self._bulk_reboot)
+        menu_more.add_command(label="🔄 Reboot Target HP", command=self._bulk_reboot)
         btn_more["menu"] = menu_more
 
         # Scan Button
-        btn_scan = _make_act_btn(f_right, "🔄", COLORS["bg_surface"], COLORS["text_primary"], self._manual_scan)
-        btn_scan.pack(side="left", padx=(4, 0))
+        btn_scan = _make_action_btn(f_right, "🔄", self._manual_scan)
+        btn_scan.pack(side="left", padx=(3, 0))
 
     def _build_body(self):
         # Scrollable Canvas for Device Grid
@@ -379,9 +422,9 @@ class PhoneFarmApp(tk.Tk):
     def _update_col_buttons(self):
         for num, btn in self.col_btns.items():
             if num == self.current_columns:
-                btn.config(bg=COLORS["accent_cyan"], fg="#000000")
+                btn.config(bg="#0284C7", fg="#ffffff")
             else:
-                btn.config(bg=COLORS["bg_surface"], fg=COLORS["text_secondary"])
+                btn.config(bg="#161926", fg=COLORS["text_secondary"])
 
     def _toggle_sync(self):
         self.sync_enabled = not self.sync_enabled
@@ -389,12 +432,12 @@ class PhoneFarmApp(tk.Tk):
             if not self.master_serial and self.devices:
                 self.master_serial = self.devices[0].serial
             self.sync.set_sync(True, self.master_serial)
-            self.btn_sync.config(text="🔴 Sync Action: ON", bg=COLORS["accent_yellow"], fg="#000000")
+            self.btn_sync.config(text="🔴 Sync Action: ON", bg="#38290D", fg="#FBBF24", activebackground="#4A3510")
             self._update_master_ui()
             self._log_status(f"🔴 Sync Action AKTIF! Master: {self.master_serial}")
         else:
             self.sync.set_sync(False, None)
-            self.btn_sync.config(text="⚪ Sync Action: OFF", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"])
+            self.btn_sync.config(text="⚪ Sync Action: OFF", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], activebackground="#282F48")
             self._log_status("Sync Action Dinonaktifkan.")
 
     def _set_master_device(self, serial: str):
@@ -411,8 +454,8 @@ class PhoneFarmApp(tk.Tk):
         if self.master_serial:
             dev = next((d for d in self.devices if d.serial == self.master_serial), None)
             name = dev.model if dev else self.master_serial
-            self.lbl_master_chip.config(text=f"👑 Master: {name}", fg=COLORS["accent_yellow"])
-            self.f_master.config(bg="#332B12")
+            self.lbl_master_chip.config(text=f"👑 Master: {name}", fg="#FBBF24")
+            self.f_master.config(bg="#261E0E")
         else:
             self.lbl_master_chip.config(text="👑 Master: -", fg=COLORS["text_secondary"])
             self.f_master.config(bg=COLORS["bg_surface"])
@@ -442,6 +485,97 @@ class PhoneFarmApp(tk.Tk):
         self._log_status("Memindai perangkat ADB...")
         threading.Thread(target=lambda: self._sync_device_list(self.adb.get_devices()), daemon=True).start()
 
+    def _touch_tracker_loop(self):
+        """Passively tracks mouse clicks and swipes on the Master device screen container
+        when Sync Action is ON, and broadcasts normalized tap/swipe events to selected targets."""
+        user32 = ctypes.windll.user32
+        VK_LBUTTON = 0x01
+        my_pid = os.getpid()
+
+        pt = wintypes.POINT()
+        is_tracking = False
+        start_x, start_y = 0, 0
+        current_x, current_y = 0, 0
+        start_time = 0.0
+        frame_x, frame_y, frame_w, frame_h = 0, 0, 0, 0
+
+        while not self._is_closing:
+            if not self.sync_enabled or not self.master_serial:
+                if is_tracking:
+                    is_tracking = False
+                time.sleep(0.04)
+                continue
+
+            card = self.device_cards.get(self.master_serial)
+            if not card or not card.winfo_exists():
+                time.sleep(0.04)
+                continue
+
+            # Check if left mouse button is pressed
+            btn_state = user32.GetAsyncKeyState(VK_LBUTTON)
+            is_down = (btn_state & 0x8000) != 0
+
+            if is_down:
+                if user32.GetCursorPos(ctypes.byref(pt)):
+                    if not is_tracking:
+                        # Check window under cursor belongs to dashboard or master scrcpy
+                        hwnd_under = user32.WindowFromPoint(pt)
+                        if hwnd_under:
+                            pid = wintypes.DWORD()
+                            user32.GetWindowThreadProcessId(hwnd_under, ctypes.byref(pid))
+                            master_inst = self.scrcpy.instances.get(self.master_serial)
+                            scrcpy_pid = master_inst.process.pid if (master_inst and master_inst.process) else 0
+
+                            if pid.value not in (my_pid, scrcpy_pid):
+                                time.sleep(0.015)
+                                continue
+
+                        # Check if mouse pressed inside Master screen frame
+                        try:
+                            fx = card.screen_frame.winfo_rootx()
+                            fy = card.screen_frame.winfo_rooty()
+                            fw = card.screen_frame.winfo_width()
+                            fh = card.screen_frame.winfo_height()
+                        except Exception:
+                            time.sleep(0.015)
+                            continue
+
+                        if fx <= pt.x < fx + fw and fy <= pt.y < fy + fh:
+                            is_tracking = True
+                            start_x, start_y = pt.x, pt.y
+                            current_x, current_y = pt.x, pt.y
+                            start_time = time.time()
+                            frame_x, frame_y, frame_w, frame_h = fx, fy, fw, fh
+                    else:
+                        current_x, current_y = pt.x, pt.y
+            else:
+                if is_tracking:
+                    is_tracking = False
+                    end_time = time.time()
+                    if frame_w > 0 and frame_h > 0:
+                        nx1 = max(0.0, min(1.0, (start_x - frame_x) / frame_w))
+                        ny1 = max(0.0, min(1.0, (start_y - frame_y) / frame_h))
+                        nx2 = max(0.0, min(1.0, (current_x - frame_x) / frame_w))
+                        ny2 = max(0.0, min(1.0, (current_y - frame_y) / frame_h))
+
+                        dist = math.hypot(current_x - start_x, current_y - start_y)
+                        duration_ms = max(100, min(1200, int((end_time - start_time) * 1000)))
+
+                        targets = self.get_sync_targets(exclude_master=True)
+                        if targets:
+                            if dist < 12:
+                                # Normal tap
+                                self.sync.broadcast_tap_normalized(targets, nx1, ny1, exclude_master=True)
+                                self.after(0, lambda t=len(targets), x=int(nx1 * 100), y=int(ny1 * 100):
+                                           self._log_status(f"👆 Tap Master ({x}%, {y}%) disinkronkan ke {t} HP target"))
+                            else:
+                                # Swipe gesture
+                                self.sync.broadcast_swipe_normalized(targets, nx1, ny1, nx2, ny2, duration_ms, exclude_master=True)
+                                self.after(0, lambda t=len(targets), ms=duration_ms:
+                                           self._log_status(f"👉 Swipe Master ({ms}ms) disinkronkan ke {t} HP target"))
+
+            time.sleep(0.015)
+
     def _sync_device_list(self, new_devices):
         if self._is_closing:
             return
@@ -454,8 +588,8 @@ class PhoneFarmApp(tk.Tk):
             self.lbl_count.config(text="● 0 HP Online", fg=COLORS["text_muted"])
             self.f_count.config(bg=COLORS["bg_surface"])
         else:
-            self.lbl_count.config(text=f"● {count} HP Online", fg=COLORS["accent_green"])
-            self.f_count.config(bg="#132E27")
+            self.lbl_count.config(text=f"● {count} HP Online", fg="#34D399")
+            self.f_count.config(bg="#10231D")
 
         new_serials = {d.serial for d in new_devices}
         current_serials = set(self.device_cards.keys())
@@ -463,6 +597,7 @@ class PhoneFarmApp(tk.Tk):
         # 1. Remove disconnected devices
         for s in current_serials - new_serials:
             self.scrcpy.stop_device(s)
+            self.sync_target_serials.discard(s)
             card = self.device_cards.pop(s, None)
             if card:
                 card.destroy()
@@ -470,6 +605,7 @@ class PhoneFarmApp(tk.Tk):
         # 2. Add newly connected devices
         for d in new_devices:
             if d.serial not in self.device_cards:
+                self.sync_target_serials.add(d.serial)
                 self.adb.update_telemetry(d)
                 self._add_device_card(d)
 
@@ -483,6 +619,7 @@ class PhoneFarmApp(tk.Tk):
         if not self.master_serial and new_devices:
             self.master_serial = new_devices[0].serial
         self._update_master_ui()
+        self._update_sync_targets_ui()
         self._update_layout()
 
     def _add_device_card(self, device: ADBDevice):
@@ -495,6 +632,9 @@ class PhoneFarmApp(tk.Tk):
             adb=self.adb,
             on_set_master=self._set_master_device,
             on_reconnect=lambda s=device.serial: self._reconnect_device(s),
+            on_toggle_sync=self._toggle_card_sync,
+            on_nav_broadcast=self._on_card_nav_broadcast,
+            is_sync_target=(device.serial in self.sync_target_serials),
         )
         self.device_cards[device.serial] = card
 
@@ -565,28 +705,159 @@ class PhoneFarmApp(tk.Tk):
     def _log_status(self, text: str):
         self.lbl_status.config(text=f"[{time.strftime('%H:%M:%S')}] {text}")
 
+    # Target Sync Management & Filters
+    def get_sync_targets(self, exclude_master: bool = False):
+        """Returns the list of devices selected for sync operations."""
+        targets = []
+        for d in self.devices:
+            if d.serial in self.sync_target_serials:
+                if exclude_master and d.serial == self.master_serial:
+                    continue
+                targets.append(d)
+        return targets
+
+    def _update_sync_targets_ui(self):
+        """Updates UI chips and cards to reflect current sync targets."""
+        for s, card in self.device_cards.items():
+            card.set_sync_target(s in self.sync_target_serials)
+
+        total = len(self.devices)
+        sel = len([d for d in self.devices if d.serial in self.sync_target_serials])
+
+        if total == 0:
+            self.lbl_sync_targets.config(text="🎯 Target: 0/0 HP", fg=COLORS["text_muted"])
+            self.f_sync_targets.config(bg=COLORS["bg_surface"])
+        elif sel == total:
+            self.lbl_sync_targets.config(text=f"🎯 Target: {sel}/{total} HP", fg="#38BDF8")
+            self.f_sync_targets.config(bg="#0E242B")
+        elif sel > 0:
+            self.lbl_sync_targets.config(text=f"🎯 Target: {sel}/{total} HP", fg="#FBBF24")
+            self.f_sync_targets.config(bg="#261E0E")
+        else:
+            self.lbl_sync_targets.config(text=f"🎯 Target: 0/{total} HP", fg="#EF4444")
+            self.f_sync_targets.config(bg="#3B1219")
+
+    def _toggle_card_sync(self, serial: str, is_target: bool):
+        if is_target:
+            self.sync_target_serials.add(serial)
+        else:
+            self.sync_target_serials.discard(serial)
+        self._update_sync_targets_ui()
+        action_name = "Diaktifkan" if is_target else "Dinonaktifkan"
+        self._log_status(f"🎯 Target Sync {serial}: {action_name}")
+
+    def _on_card_nav_broadcast(self, serial: str, action: str):
+        """Handles navigation buttons clicked on device cards."""
+        # Execute on source device first
+        if action == "back":
+            threading.Thread(target=self.adb.key_back, args=(serial,), daemon=True).start()
+        elif action == "home":
+            threading.Thread(target=self.adb.key_home, args=(serial,), daemon=True).start()
+        elif action == "recents":
+            threading.Thread(target=self.adb.key_recents, args=(serial,), daemon=True).start()
+        elif action == "power":
+            threading.Thread(target=self.adb.key_power, args=(serial,), daemon=True).start()
+
+        # If sync enabled and triggered by master, broadcast to selected slave targets
+        if self.sync_enabled and serial == self.master_serial:
+            targets = self.get_sync_targets(exclude_master=True)
+            if targets:
+                if action == "back":
+                    self.sync.broadcast_back(targets)
+                elif action == "home":
+                    self.sync.broadcast_home(targets)
+                elif action == "recents":
+                    self.sync.broadcast_recents(targets)
+                elif action == "power":
+                    self.sync.broadcast_power(targets)
+                self._log_status(f"👑 Master navigasi '{action.upper()}' disinkronkan ke {len(targets)} HP")
+
+    def _select_all_targets(self):
+        self.sync_target_serials = {d.serial for d in self.devices}
+        self._update_sync_targets_ui()
+        self._log_status(f"🎯 Memilih seluruh {len(self.devices)} HP untuk sinkronisasi")
+
+    def _deselect_all_targets(self):
+        self.sync_target_serials = {self.master_serial} if self.master_serial else set()
+        self._update_sync_targets_ui()
+        self._log_status("🎯 Mengosongkan target sync (hanya Master)")
+
+    def _filter_same_os(self):
+        m_dev = next((d for d in self.devices if d.serial == self.master_serial), None)
+        if not m_dev or not m_dev.os_version:
+            messagebox.showinfo("Info", "Info OS Master belum terdeteksi. Silakan coba sesaat lagi.", parent=self)
+            return
+        os_ver = m_dev.os_version
+        self.sync_target_serials = {d.serial for d in self.devices if d.os_version == os_ver or d.serial == self.master_serial}
+        self._update_sync_targets_ui()
+        self._log_status(f"🎯 Memilih HP dengan OS sama (Android {os_ver}): {len(self.sync_target_serials)} HP")
+
+    def _filter_same_resolution(self):
+        m_dev = next((d for d in self.devices if d.serial == self.master_serial), None)
+        if not m_dev or m_dev.screen_width <= 0:
+            messagebox.showinfo("Info", "Info Resolusi Master belum terdeteksi. Silakan coba sesaat lagi.", parent=self)
+            return
+        mw, mh = m_dev.screen_width, m_dev.screen_height
+        self.sync_target_serials = {d.serial for d in self.devices if (d.screen_width == mw and d.screen_height == mh) or d.serial == self.master_serial}
+        self._update_sync_targets_ui()
+        self._log_status(f"🎯 Memilih HP dengan Resolusi sama ({mw}x{mh}): {len(self.sync_target_serials)} HP")
+
+    def _filter_same_brand(self):
+        m_dev = next((d for d in self.devices if d.serial == self.master_serial), None)
+        if not m_dev or not m_dev.brand:
+            messagebox.showinfo("Info", "Info Merek Master belum terdeteksi. Silakan coba sesaat lagi.", parent=self)
+            return
+        brand = m_dev.brand.lower()
+        self.sync_target_serials = {d.serial for d in self.devices if (d.brand and d.brand.lower() == brand) or d.serial == self.master_serial}
+        self._update_sync_targets_ui()
+        self._log_status(f"🎯 Memilih HP dengan Merek sama ({m_dev.brand}): {len(self.sync_target_serials)} HP")
+
+    def _filter_exact_match(self):
+        m_dev = next((d for d in self.devices if d.serial == self.master_serial), None)
+        if not m_dev:
+            messagebox.showinfo("Info", "Belum ada HP Master yang dipilih.", parent=self)
+            return
+        mw, mh = m_dev.screen_width, m_dev.screen_height
+        os_ver = m_dev.os_version
+        brand = m_dev.brand.lower() if m_dev.brand else ""
+
+        def _is_match(d: ADBDevice):
+            if d.serial == self.master_serial:
+                return True
+            same_res = (d.screen_width == mw and d.screen_height == mh)
+            same_os = (d.os_version == os_ver) if (os_ver and d.os_version) else True
+            same_brand = (d.brand.lower() == brand) if (brand and d.brand) else True
+            return same_res and same_os and same_brand
+
+        self.sync_target_serials = {d.serial for d in self.devices if _is_match(d)}
+        self._update_sync_targets_ui()
+        self._log_status(f"🎯 Memilih HP identik (Merek, OS & Layar sama): {len(self.sync_target_serials)} HP")
+
     # Bulk Operations
     def _open_bulk_install(self):
-        if not self.devices:
-            messagebox.showinfo("Info", "Tidak ada HP yang terhubung!", parent=self)
+        targets = self.get_sync_targets()
+        if not targets:
+            messagebox.showinfo("Info", "Tidak ada HP target sync yang dipilih! Centang minimal 1 HP.", parent=self)
             return
-        BulkInstallDialog(self, self.devices, self.sync)
+        BulkInstallDialog(self, targets, self.sync)
 
     def _open_bulk_shell(self):
-        if not self.devices:
-            messagebox.showinfo("Info", "Tidak ada HP yang terhubung!", parent=self)
+        targets = self.get_sync_targets()
+        if not targets:
+            messagebox.showinfo("Info", "Tidak ada HP target sync yang dipilih! Centang minimal 1 HP.", parent=self)
             return
-        BulkShellDialog(self, self.devices, self.sync)
+        BulkShellDialog(self, targets, self.sync)
 
     def _open_bulk_text(self):
-        if not self.devices:
-            messagebox.showinfo("Info", "Tidak ada HP yang terhubung!", parent=self)
+        targets = self.get_sync_targets()
+        if not targets:
+            messagebox.showinfo("Info", "Tidak ada HP target sync yang dipilih! Centang minimal 1 HP.", parent=self)
             return
         BulkTextDialog(
             self,
-            self.devices,
+            targets,
             self.sync,
-            on_sent=lambda txt: self._log_status(f"Mengirim teks '{txt}' ke {len(self.devices)} HP")
+            on_sent=lambda txt: self._log_status(f"Mengirim teks '{txt}' ke {len(targets)} HP target")
         )
 
     def _open_wifi_dialog(self):
@@ -598,41 +869,48 @@ class PhoneFarmApp(tk.Tk):
         )
 
     def _bulk_home(self):
-        if self.devices:
-            self.sync.broadcast_home(self.devices)
-            self._log_status("Menekan HOME di seluruh HP")
+        targets = self.get_sync_targets()
+        if targets:
+            self.sync.broadcast_home(targets)
+            self._log_status(f"Menekan HOME di {len(targets)} HP target")
 
     def _bulk_back(self):
-        if self.devices:
-            self.sync.broadcast_back(self.devices)
-            self._log_status("Menekan BACK di seluruh HP")
+        targets = self.get_sync_targets()
+        if targets:
+            self.sync.broadcast_back(targets)
+            self._log_status(f"Menekan BACK di {len(targets)} HP target")
 
     def _bulk_screen_off(self):
-        if self.devices:
-            self.sync.broadcast_screen_off(self.devices)
-            self._log_status("Mematikan layar fisik seluruh HP (Mirror tetap aktif)")
+        targets = self.get_sync_targets()
+        if targets:
+            self.sync.broadcast_screen_off(targets)
+            self._log_status(f"Mematikan layar fisik di {len(targets)} HP target")
 
     def _bulk_screen_on(self):
-        if self.devices:
-            self.sync.broadcast_screen_on(self.devices)
-            self._log_status("Menghidupkan layar seluruh HP")
+        targets = self.get_sync_targets()
+        if targets:
+            self.sync.broadcast_screen_on(targets)
+            self._log_status(f"Menghidupkan layar di {len(targets)} HP target")
             # Auto-reconnect any device whose display stream died
-            for d in self.devices:
+            for d in targets:
                 inst = self.scrcpy.instances.get(d.serial)
                 if not inst or not inst.is_running or (inst.process and inst.process.poll() is not None):
                     self.after(500, lambda s=d.serial: self._reconnect_device(s))
 
     def _bulk_power(self):
-        if self.devices:
-            self.sync.broadcast_power(self.devices)
-            self._log_status("Mengirim tombol Power ke seluruh HP")
+        targets = self.get_sync_targets()
+        if targets:
+            self.sync.broadcast_power(targets)
+            self._log_status(f"Mengirim tombol Power ke {len(targets)} HP target")
 
     def _bulk_reboot(self):
-        if not self.devices:
+        targets = self.get_sync_targets()
+        if not targets:
+            messagebox.showinfo("Info", "Tidak ada HP target sync yang dipilih!", parent=self)
             return
-        if messagebox.askyesno("Konfirmasi", f"Apakah Anda yakin ingin me-restart seluruh {len(self.devices)} HP?", parent=self):
-            self.sync.broadcast_reboot(self.devices)
-            self._log_status(f"Merestart {len(self.devices)} HP")
+        if messagebox.askyesno("Konfirmasi", f"Apakah Anda yakin ingin me-restart {len(targets)} HP target terpilih?", parent=self):
+            self.sync.broadcast_reboot(targets)
+            self._log_status(f"Merestart {len(targets)} HP target")
 
     def _on_close(self):
         self._is_closing = True

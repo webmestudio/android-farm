@@ -21,9 +21,12 @@ class ADBDevice:
         self.is_charging: bool = False
         self.screen_width: int = 1080
         self.screen_height: int = 2400
+        self.os_version: str = ""
+        self.brand: str = ""
+        self.is_sync_target: bool = True
 
     def __repr__(self):
-        return f"<ADBDevice {self.serial} ({self.model}) - {self.state}>"
+        return f"<ADBDevice {self.serial} ({self.model}) - Android {self.os_version or '?'} - {self.state}>"
 
 
 class ADBManager:
@@ -107,6 +110,16 @@ class ADBManager:
             if size_match:
                 device.screen_width = int(size_match.group(1))
                 device.screen_height = int(size_match.group(2))
+
+        # 3. OS Version & Brand (queried once per device session)
+        if not device.os_version or not device.brand:
+            ok, out = self._exec(["-s", device.serial, "shell", "getprop ro.build.version.release; getprop ro.product.brand"])
+            if ok and out:
+                lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+                if len(lines) >= 1:
+                    device.os_version = lines[0]
+                if len(lines) >= 2:
+                    device.brand = lines[1].capitalize()
 
     def send_key(self, serial: str, keycode: int) -> bool:
         """Sends an Android keycode (e.g. 3 for Home, 4 for Back)."""

@@ -18,6 +18,9 @@ class DeviceCard(tk.Frame):
         adb: ADBManager,
         on_set_master: Optional[Callable[[str], None]] = None,
         on_reconnect: Optional[Callable[[str], None]] = None,
+        on_toggle_sync: Optional[Callable[[str, bool], None]] = None,
+        on_nav_broadcast: Optional[Callable[[str, str], None]] = None,
+        is_sync_target: bool = True,
         **kwargs
     ):
         super().__init__(
@@ -32,7 +35,10 @@ class DeviceCard(tk.Frame):
         self.adb = adb
         self.on_set_master = on_set_master
         self.on_reconnect = on_reconnect
+        self.on_toggle_sync = on_toggle_sync
+        self.on_nav_broadcast = on_nav_broadcast
         self.is_master = False
+        self.is_sync_target = is_sync_target
 
         # Calculate exact phone aspect ratio
         sw = device.screen_width if device.screen_width > 0 else 1080
@@ -103,6 +109,34 @@ class DeviceCard(tk.Frame):
             fg=COLORS["text_secondary"]
         )
         self.lbl_temp.pack(side="right")
+
+        # 1.5. Sub-Header: Sync Target Toggle Pill + OS & Resolution Specs Badge
+        self.sub_header = tk.Frame(self, bg=COLORS["bg_surface"], padx=6, pady=2)
+        self.sub_header.pack(fill="x", side="top")
+
+        self.btn_sync_toggle = tk.Button(
+            self.sub_header,
+            text="☑ Sync" if self.is_sync_target else "☐ Skip",
+            command=self._on_sync_toggle_click,
+            bg="#132E27" if self.is_sync_target else COLORS["bg_card"],
+            fg=COLORS["accent_green"] if self.is_sync_target else COLORS["text_muted"],
+            relief="flat",
+            bd=0,
+            font=("Segoe UI", 8, "bold"),
+            cursor="hand2",
+            padx=5,
+            pady=0
+        )
+        self.btn_sync_toggle.pack(side="left")
+
+        self.lbl_specs = tk.Label(
+            self.sub_header,
+            text="",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_surface"],
+            fg=COLORS["text_secondary"]
+        )
+        self.lbl_specs.pack(side="right")
 
         # 2. Smartphone Screen Container (Pixel-perfect matching phone ratio)
         self.screen_frame = tk.Frame(
@@ -209,19 +243,52 @@ class DeviceCard(tk.Frame):
         if self.on_reconnect:
             self.on_reconnect(self.device.serial)
 
+    def set_sync_target(self, is_target: bool):
+        """Updates sync target state and visual badge."""
+        self.is_sync_target = is_target
+        if self.is_master:
+            self.btn_sync_toggle.config(
+                text="👑 Master",
+                bg="#332B12",
+                fg=COLORS["accent_yellow"]
+            )
+        elif self.is_sync_target:
+            self.btn_sync_toggle.config(
+                text="☑ Sync",
+                bg="#132E27",
+                fg=COLORS["accent_green"]
+            )
+        else:
+            self.btn_sync_toggle.config(
+                text="☐ Skip",
+                bg=COLORS["bg_card"],
+                fg=COLORS["text_muted"]
+            )
+
+    def _on_sync_toggle_click(self):
+        """User clicked the sync toggle button on this card."""
+        if self.is_master:
+            return  # Master is the source, cannot be toggled off as slave
+        new_val = not self.is_sync_target
+        self.set_sync_target(new_val)
+        if self.on_toggle_sync:
+            self.on_toggle_sync(self.device.serial, new_val)
+
     def set_master(self, is_master: bool):
         self.is_master = is_master
         if is_master:
             self.config(highlightbackground=COLORS["border_master"], highlightthickness=2)
             self.btn_master.config(bg=COLORS["accent_yellow"], fg="#000000")
             self.dot_indicator.config(fg=COLORS["accent_yellow"])
+            self.btn_sync_toggle.config(text="👑 Master", bg="#332B12", fg=COLORS["accent_yellow"])
         else:
             self.config(highlightbackground=COLORS["border_card"], highlightthickness=1)
             self.btn_master.config(bg=COLORS["bg_surface"], fg=COLORS["text_secondary"])
             self.dot_indicator.config(fg=COLORS["accent_green"])
+            self.set_sync_target(self.is_sync_target)
 
     def update_telemetry(self):
-        """Updates battery level and temperature on UI."""
+        """Updates battery level, temperature, and OS/specs on UI."""
         if self.device.battery_level >= 0:
             bolt = "⚡" if self.device.is_charging else ""
             self.lbl_battery.config(text=f"{bolt}{self.device.battery_level}%")
@@ -238,19 +305,38 @@ class DeviceCard(tk.Frame):
         if self.device.battery_temp > 0:
             self.lbl_temp.config(text=f"🌡 {self.device.battery_temp}°C")
 
+        # Update specs chip (OS version and Resolution)
+        os_tag = f"A{self.device.os_version}" if self.device.os_version else ""
+        res_tag = f"{self.device.screen_width}x{self.device.screen_height}" if self.device.screen_width > 0 else ""
+        specs_str = f"{os_tag} • {res_tag}" if (os_tag and res_tag) else (os_tag or res_tag)
+        if specs_str:
+            self.lbl_specs.config(text=specs_str)
+
     # Actions
     def _action_back(self):
-        threading.Thread(target=self.adb.key_back, args=(self.device.serial,), daemon=True).start()
+        if self.is_master and self.on_nav_broadcast:
+            self.on_nav_broadcast(self.device.serial, "back")
+        else:
+            threading.Thread(target=self.adb.key_back, args=(self.device.serial,), daemon=True).start()
 
     def _action_home(self):
-        threading.Thread(target=self.adb.key_home, args=(self.device.serial,), daemon=True).start()
+        if self.is_master and self.on_nav_broadcast:
+            self.on_nav_broadcast(self.device.serial, "home")
+        else:
+            threading.Thread(target=self.adb.key_home, args=(self.device.serial,), daemon=True).start()
 
     def _action_recents(self):
-        threading.Thread(target=self.adb.key_recents, args=(self.device.serial,), daemon=True).start()
+        if self.is_master and self.on_nav_broadcast:
+            self.on_nav_broadcast(self.device.serial, "recents")
+        else:
+            threading.Thread(target=self.adb.key_recents, args=(self.device.serial,), daemon=True).start()
 
     def _action_power(self):
         """Sends KEYCODE_POWER (26) to toggle screen on/off like physical phone power button."""
-        threading.Thread(target=self.adb.key_power, args=(self.device.serial,), daemon=True).start()
+        if self.is_master and self.on_nav_broadcast:
+            self.on_nav_broadcast(self.device.serial, "power")
+        else:
+            threading.Thread(target=self.adb.key_power, args=(self.device.serial,), daemon=True).start()
 
     def _action_wake(self):
         """Sends KEYCODE_WAKEUP (224) to turn on screen if asleep."""
@@ -311,7 +397,7 @@ class BulkInstallDialog(tk.Toplevel):
 
         lbl = tk.Label(
             header_f,
-            text="📦 Install APK ke Seluruh Device Serentak",
+            text=f"📦 Install APK ke {len(self.devices)} HP (Target Sync)",
             font=("Segoe UI", 11, "bold"),
             bg=COLORS["bg_header"],
             fg=COLORS["text_white"]
@@ -360,22 +446,25 @@ class BulkInstallDialog(tk.Toplevel):
         )
         style.configure("Treeview.Heading", background=COLORS["bg_surface"], foreground=COLORS["text_white"], relief="flat")
 
-        self.tree = ttk.Treeview(body_f, columns=("serial", "model", "status"), show="headings", height=8)
+        self.tree = ttk.Treeview(body_f, columns=("serial", "model", "specs", "status"), show="headings", height=8)
         self.tree.heading("serial", text="Serial")
         self.tree.heading("model", text="Device")
+        self.tree.heading("specs", text="OS & Layar")
         self.tree.heading("status", text="Status")
         self.tree.column("serial", width=120)
-        self.tree.column("model", width=140)
-        self.tree.column("status", width=200)
+        self.tree.column("model", width=120)
+        self.tree.column("specs", width=130)
+        self.tree.column("status", width=140)
         self.tree.pack(fill="both", expand=True, pady=(0, 10))
 
         for d in self.devices:
-            self.tree.insert("", "end", iid=d.serial, values=(d.serial, d.model, "Siap"))
+            spec_str = f"A{d.os_version or '?'} ({d.screen_width}x{d.screen_height})"
+            self.tree.insert("", "end", iid=d.serial, values=(d.serial, d.model, spec_str, "Siap"))
 
         # Install Action button
         self.btn_install = tk.Button(
             body_f,
-            text="🚀 Mulai Install ke Seluruh Device",
+            text=f"🚀 Mulai Install ke {len(self.devices)} HP Terpilih",
             bg=COLORS["accent_green"],
             fg="#000000",
             font=("Segoe UI", 10, "bold"),
@@ -436,7 +525,7 @@ class BulkShellDialog(tk.Toplevel):
 
         lbl = tk.Label(
             header_f,
-            text="💻 Jalankan Perintah Shell ke Seluruh HP",
+            text=f"💻 Jalankan Perintah Shell ke {len(self.devices)} HP (Target Sync)",
             font=("Segoe UI", 11, "bold"),
             bg=COLORS["bg_header"],
             fg=COLORS["text_white"]
@@ -529,7 +618,7 @@ class BulkTextDialog(tk.Toplevel):
 
         lbl = tk.Label(
             header_f,
-            text=f"📝 Ketik Teks ke {len(self.devices)} HP Serentak",
+            text=f"📝 Ketik Teks ke {len(self.devices)} HP (Target Sync)",
             bg=COLORS["bg_header"],
             fg=COLORS["text_white"],
             font=("Segoe UI", 10, "bold")
@@ -562,7 +651,7 @@ class BulkTextDialog(tk.Toplevel):
 
         btn = tk.Button(
             body_f,
-            text="🚀 Kirim ke Semua HP (Enter)",
+            text=f"🚀 Kirim ke {len(self.devices)} HP Terpilih (Enter)",
             bg=COLORS["accent_blue"],
             fg="#ffffff",
             font=("Segoe UI", 9, "bold"),

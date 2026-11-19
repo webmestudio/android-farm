@@ -57,8 +57,10 @@ class SyncEngine:
         targets = [d for d in devices if not (exclude_master and d.serial == self.master_serial)]
 
         def _tap(d: ADBDevice):
-            px = int(norm_x * d.screen_width)
-            py = int(norm_y * d.screen_height)
+            w = d.screen_width if d.screen_width > 0 else 1080
+            h = d.screen_height if d.screen_height > 0 else 2400
+            px = int(norm_x * w)
+            py = int(norm_y * h)
             return self.adb.send_tap(d.serial, px, py)
 
         futures = [self.executor.submit(_tap, d) for d in targets]
@@ -78,10 +80,12 @@ class SyncEngine:
         targets = [d for d in devices if not (exclude_master and d.serial == self.master_serial)]
 
         def _swipe(d: ADBDevice):
-            x1 = int(nx1 * d.screen_width)
-            y1 = int(ny1 * d.screen_height)
-            x2 = int(nx2 * d.screen_width)
-            y2 = int(ny2 * d.screen_height)
+            w = d.screen_width if d.screen_width > 0 else 1080
+            h = d.screen_height if d.screen_height > 0 else 2400
+            x1 = int(nx1 * w)
+            y1 = int(ny1 * h)
+            x2 = int(nx2 * w)
+            y2 = int(ny2 * h)
             return self.adb.send_swipe(d.serial, x1, y1, x2, y2, duration_ms)
 
         futures = [self.executor.submit(_swipe, d) for d in targets]
